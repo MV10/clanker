@@ -118,6 +118,7 @@ const ClankerParser = {
    */
   verifyPageStructure() {
     const details = {
+      hasSidebar: document.querySelector(ClankerSelectors.SIDEBAR_ITEM) !== null,
       hasConversationContainer: document.querySelector(ClankerSelectors.CONVERSATION_CONTAINER) !== null,
       hasConversationThread: document.querySelector(ClankerSelectors.CONVERSATION_THREAD) !== null,
       hasMessageWrapper: document.querySelector(ClankerSelectors.MESSAGE_WRAPPER) !== null,
@@ -126,12 +127,19 @@ const ClankerParser = {
                      document.querySelector(ClankerSelectors.INPUT_BOX) !== null,
     };
 
-    const valid = details.hasConversationContainer ||
-                  details.hasConversationThread ||
-                  details.hasMessageWrapper ||
-                  details.hasMessageContent;
+    // Page is valid if we can find Google Messages elements (sidebar confirms we're on the right page)
+    const hasConversation = details.hasConversationContainer ||
+                            details.hasConversationThread ||
+                            details.hasMessageWrapper ||
+                            details.hasMessageContent;
 
-    return { valid, details };
+    // Valid if we have a conversation OR we have the sidebar (no conversation selected yet)
+    const valid = hasConversation || details.hasSidebar;
+
+    // Track whether a conversation is active
+    const hasActiveConversation = hasConversation;
+
+    return { valid, hasActiveConversation, details };
   },
 
   /**

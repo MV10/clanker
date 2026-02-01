@@ -223,12 +223,20 @@
    * Initialize the extension
    */
   async function initialize() {
+    // Prevent duplicate initialization (check both flag and in-progress state)
+    if (state.initialized || state.initializing) {
+      console.log('[Clanker] Already initialized or initializing, skipping');
+      return;
+    }
+    state.initializing = true;
+
     console.log('[Clanker] Initializing...');
 
     // Load configuration and mode
     const configResponse = await chrome.runtime.sendMessage({ type: 'GET_CONFIG' });
     if (!configResponse.success) {
       showWarning('Failed to load Clanker configuration');
+      state.initializing = false;
       return;
     }
 
@@ -252,25 +260,34 @@
     if (!verification.valid) {
       console.warn('[Clanker] Page structure check failed:', verification.details);
       showWarning('Clanker cannot recognize the page structure. Google Messages may have updated.');
+      state.initializing = false;
       return;
     }
 
-    // Detect current conversation
-    const conversationId = Parser.detectConversationId();
-    await handleConversationChange(conversationId);
-
-    // Set up observers and listeners
+    // Set up observers and listeners (do this even if no conversation is active)
     setupMessageObserver();
     setupInputObserver();
     setupConversationObserver();
     setupMessageListener();
 
-    // Parse initial conversation
-    parseExistingConversation();
+    // If no conversation is active, wait for one to be selected
+    if (!verification.hasActiveConversation) {
+      console.log('[Clanker] No active conversation, waiting for selection');
+      // The conversation observer will detect when a conversation becomes active
+    } else {
+      // Detect current conversation and parse it
+      const conversationId = Parser.detectConversationId();
+      await handleConversationChange(conversationId);
+      // Wait for messages to fully load before parsing
+      setTimeout(() => {
+        parseExistingConversation();
+      }, 500);
+    }
 
     // Notify background that content script is ready
     chrome.runtime.sendMessage({ type: 'CONTENT_READY' });
 
+    state.initializing = false;
     state.initialized = true;
     console.log('[Clanker] Initialized successfully, mode:', state.mode);
   }
@@ -398,14 +415,24 @@
 
       // Reset mode to deactivated for new conversations
       state.mode = MODES.DEACTIVATED;
-      await chrome.runtime.sendMessage({ type: 'SET_MODE', mode: MODES.DEACTIVATED });
+      try {
+        await chrome.runtime.sendMessage({ type: 'SET_MODE', mode: MODES.DEACTIVATED });
+      } catch (e) {
+        // Extension context may have been invalidated (e.g., extension reloaded)
+        console.warn('[Clanker] Could not notify background of mode change');
+      }
     }
 
     state.currentConversationId = newConversationId;
 
     // Load any existing summary and customization for this conversation
-    await loadConversationSummary();
-    await loadConversationCustomization();
+    try {
+      await loadConversationSummary();
+      await loadConversationCustomization();
+    } catch (e) {
+      // Storage may fail if extension context invalidated
+      console.warn('[Clanker] Could not load conversation data');
+    }
   }
 
   /**
@@ -490,15 +517,46 @@
    */
   function setupConversationObserver() {
     let lastUrl = window.location.href;
+    let conversationChangeTimer = null;
+    let isProcessingChange = false;
+
+    // Debounced handler for conversation changes
+    function handlePotentialConversationChange() {
+      // Skip if already processing a change
+      if (isProcessingChange) return;
+
+      // Clear any pending timer
+      if (conversationChangeTimer) {
+        clearTimeout(conversationChangeTimer);
+      }
+
+      // Debounce: wait for DOM to settle before processing
+      conversationChangeTimer = setTimeout(async () => {
+        // Double-check we're not already processing
+        if (isProcessingChange) return;
+
+        const newConversationId = Parser.detectConversationId();
+        if (newConversationId !== state.currentConversationId) {
+          isProcessingChange = true;
+          try {
+            await handleConversationChange(newConversationId);
+            // Wait a bit more for messages to load, then parse
+            setTimeout(() => {
+              parseExistingConversation();
+              isProcessingChange = false;
+            }, 300);
+          } catch (e) {
+            isProcessingChange = false;
+            console.warn('[Clanker] Error during conversation change:', e);
+          }
+        }
+      }, 200);
+    }
 
     const urlObserver = new MutationObserver(() => {
       if (window.location.href !== lastUrl) {
         lastUrl = window.location.href;
-        const newConversationId = Parser.detectConversationId();
-        if (newConversationId !== state.currentConversationId) {
-          handleConversationChange(newConversationId);
-          parseExistingConversation();
-        }
+        handlePotentialConversationChange();
       }
     });
 
@@ -508,11 +566,9 @@
     });
 
     window.addEventListener('popstate', () => {
-      const newConversationId = Parser.detectConversationId();
-      if (newConversationId !== state.currentConversationId) {
-        handleConversationChange(newConversationId);
-        parseExistingConversation();
-      }
+      // Update lastUrl to stay in sync
+      lastUrl = window.location.href;
+      handlePotentialConversationChange();
     });
   }
 
@@ -532,6 +588,9 @@
    * Show warning banner to user with dismiss button
    */
   function showWarning(message) {
+    // Remove any existing warning first
+    dismissWarning();
+
     const banner = document.createElement('div');
     banner.className = 'clanker-warning';
 
@@ -549,6 +608,16 @@
     banner.appendChild(dismissBtn);
     document.body.appendChild(banner);
     console.warn('[Clanker]', message);
+  }
+
+  /**
+   * Remove any existing warning banner
+   */
+  function dismissWarning() {
+    const existing = document.querySelector('.clanker-warning');
+    if (existing) {
+      existing.remove();
+    }
   }
 
   /**
@@ -649,12 +718,29 @@
   /**
    * Parse existing conversation history
    */
-  function parseExistingConversation() {
+  function parseExistingConversation(retryCount = 0) {
     // Use parser to get full conversation context
     state.conversation = Parser.parseConversation();
 
+    // If no messages found and we haven't retried too many times, try again
+    // Large conversations may take several seconds to load from the user's phone
+    if (state.conversation.messageCount === 0 && retryCount < 10) {
+      console.log(`[Clanker] No messages found yet, retrying... (${retryCount + 1}/10)`);
+      setTimeout(() => {
+        parseExistingConversation(retryCount + 1);
+      }, 1000);
+      return;
+    }
+
+    // Successfully found a conversation - dismiss any warning banner
+    if (state.conversation.messageCount > 0) {
+      dismissWarning();
+    }
+
     console.log(`[Clanker] Found ${state.conversation.messageCount} existing messages`);
-    console.log('[Clanker] Participants:', Array.from(state.conversation.participants));
+    if (state.conversation.participants.size > 0) {
+      console.log('[Clanker] Participants:', Array.from(state.conversation.participants));
+    }
 
     // Mark all existing messages as processed
     for (const msg of state.conversation.messages) {
