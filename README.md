@@ -2,7 +2,7 @@
 
 > POSSIBLY UNSAFE, MOSTLY UNTESTED WORK-IN-PROGRESS; DO NOT USE YET.
 
-Clanker is an experimental Chromium browser extension which allows an OpenAI-compliant LLM such as Grok or ChatGPT to participate in your Google Messages SMS conversations.
+Clanker is an experimental Chromium browser extension which allows an OpenAI-compliant LLM such as Grok, ChatGPT or even locally-hosted AIs to participate in your Google Messages SMS conversations.
 
 You will require an API key but costs should be very low. Analysis of a real, active, 3 hour conversation between two people estimated the Grok API would incur less than one cent of processing time (January 2026 rates).
 
