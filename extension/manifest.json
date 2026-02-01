@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "description": "Allow an OpenAI-compliant LLM to participate in Google Messages SMS conversations",
   "permissions": [
-    "storage",
     "activeTab",
     "contextMenus"
   ],
@@ -17,7 +16,7 @@
   "content_scripts": [
     {
       "matches": ["https://messages.google.com/*"],
-      "js": ["parser.js", "content.js"],
+      "js": ["storage.js", "parser.js", "content.js"],
       "css": ["content.css"]
     }
   ],

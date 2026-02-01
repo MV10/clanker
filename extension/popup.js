@@ -3,6 +3,9 @@
  * Handles settings configuration and API connection testing
  */
 
+// Storage module is loaded before this script via popup.html
+const Storage = window.ClankerStorage;
+
 const STORAGE_KEYS = {
   API_ENDPOINT: 'apiEndpoint',
   API_KEY: 'apiKey',
@@ -30,7 +33,7 @@ const elements = {
  */
 async function loadSettings() {
   try {
-    const result = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
+    const result = await Storage.get(Object.values(STORAGE_KEYS));
 
     if (result[STORAGE_KEYS.API_ENDPOINT]) {
       elements.apiEndpoint.value = result[STORAGE_KEYS.API_ENDPOINT];
@@ -124,7 +127,7 @@ async function saveSettings(event) {
   };
 
   try {
-    await chrome.storage.local.set(settings);
+    await Storage.set(settings);
     showBanner('Settings saved successfully', 'success');
     updateConnectionStatus();
   } catch (error) {
@@ -189,7 +192,7 @@ function showBanner(message, type) {
  * Update connection status display
  */
 async function updateConnectionStatus() {
-  const result = await chrome.storage.local.get([
+  const result = await Storage.get([
     STORAGE_KEYS.API_ENDPOINT,
     STORAGE_KEYS.API_KEY,
     STORAGE_KEYS.MODEL

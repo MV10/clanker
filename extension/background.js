@@ -3,6 +3,10 @@
  * Handles LLM API communication and extension lifecycle
  */
 
+// Load storage module for IndexedDB access
+importScripts('storage.js');
+const Storage = self.ClankerStorage;
+
 const STORAGE_KEYS = {
   API_ENDPOINT: 'apiEndpoint',
   API_KEY: 'apiKey',
@@ -125,9 +129,9 @@ function isValidEndpoint(url) {
 /**
  * Send conversation to LLM and get response
  */
-async function handleLLMRequest({ messages, systemPrompt, images }) {
+async function handleLLMRequest({ messages, systemPrompt, summary, customization, imageData }) {
   try {
-    const config = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
+    const config = await Storage.get(Object.values(STORAGE_KEYS));
 
     if (!config[STORAGE_KEYS.API_ENDPOINT] ||
         !config[STORAGE_KEYS.API_KEY] ||
@@ -147,21 +151,44 @@ async function handleLLMRequest({ messages, systemPrompt, images }) {
       apiMessages.push({ role: 'system', content: systemPrompt });
     }
 
-    // Add conversation messages
-    // If images are provided and model might support vision, include them
-    if (images && images.length > 0) {
-      // Add image context to the last user message or create a new one
-      const imageDescriptions = images.map((img, i) =>
-        `[Image ${i + 1}: ${img.alt}]`
-      ).join(' ');
-
-      // Append image context to system prompt or add as user message
+    // Add active customization as additional system instruction
+    if (customization) {
       apiMessages.push({
-        role: 'user',
-        content: `The conversation includes these recent images: ${imageDescriptions}`
+        role: 'system',
+        content: `[ACTIVE CUSTOMIZATION]\n${customization}`
       });
     }
 
+    // Add conversation summary if available (provides context for older messages)
+    if (summary) {
+      apiMessages.push({
+        role: 'user',
+        content: `[CONVERSATION SUMMARY - older messages not shown]\n${summary}`
+      });
+    }
+
+    // Add actual image data if this is a follow-up request with image
+    if (imageData) {
+      // For vision-capable models, include as image content
+      apiMessages.push({
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `[IMAGE DATA for ${imageData.src} - ${imageData.width}x${imageData.height}]`
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: imageData.dataUrl,
+              detail: 'high'
+            }
+          }
+        ]
+      });
+    }
+
+    // Add recent literal messages (images are inline as [IMAGE: blob:...] format)
     apiMessages.push(...messages);
 
     const response = await fetch(
@@ -175,7 +202,7 @@ async function handleLLMRequest({ messages, systemPrompt, images }) {
         body: JSON.stringify({
           model: config[STORAGE_KEYS.MODEL],
           messages: apiMessages,
-          max_tokens: 256,
+          max_tokens: 512,
           temperature: 0.7
         })
       }
@@ -190,13 +217,21 @@ async function handleLLMRequest({ messages, systemPrompt, images }) {
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
+    const rawContent = data.choices?.[0]?.message?.content;
 
-    if (!content) {
+    if (!rawContent) {
       return { success: false, error: 'No response from LLM' };
     }
 
-    return { success: true, content };
+    // Parse JSON response from LLM
+    const parsed = parseLLMResponse(rawContent);
+    return {
+      success: true,
+      content: parsed.response,
+      summary: parsed.summary || null,
+      requestImage: parsed.requestImage || null,
+      customization: parsed.customization
+    };
   } catch (error) {
     // Provide more specific error messages for common failures
     if (error.name === 'TypeError' && error.message.includes('fetch')) {
@@ -207,11 +242,50 @@ async function handleLLMRequest({ messages, systemPrompt, images }) {
 }
 
 /**
+ * Parse LLM response which should be JSON with response and optional summary
+ * Falls back to treating entire content as response if not valid JSON
+ */
+function parseLLMResponse(content) {
+  // Try to parse as JSON
+  try {
+    // Handle case where LLM wraps JSON in markdown code block
+    let jsonStr = content.trim();
+    if (jsonStr.startsWith('```json')) {
+      jsonStr = jsonStr.slice(7);
+    } else if (jsonStr.startsWith('```')) {
+      jsonStr = jsonStr.slice(3);
+    }
+    if (jsonStr.endsWith('```')) {
+      jsonStr = jsonStr.slice(0, -3);
+    }
+    jsonStr = jsonStr.trim();
+
+    const parsed = JSON.parse(jsonStr);
+
+    // Response can be a string or null (LLM chose not to respond)
+    if (typeof parsed.response === 'string' || parsed.response === null) {
+      return {
+        response: parsed.response,
+        summary: typeof parsed.summary === 'string' ? parsed.summary : null,
+        requestImage: typeof parsed.requestImage === 'string' ? parsed.requestImage : null,
+        // Customization can be a string (set/update) or null (clear) or undefined (no change)
+        customization: parsed.customization
+      };
+    }
+  } catch (e) {
+    // Not valid JSON, fall through
+  }
+
+  // Fallback: treat entire content as the response
+  return { response: content, summary: null, requestImage: null };
+}
+
+/**
  * Get current configuration
  */
 async function handleGetConfig() {
   try {
-    const config = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
+    const config = await Storage.get(Object.values(STORAGE_KEYS));
     return {
       success: true,
       config: {
@@ -235,7 +309,7 @@ async function handleGetMode(tabId) {
   }
 
   // Check if configured
-  const config = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
+  const config = await Storage.get(Object.values(STORAGE_KEYS));
   const isConfigured = !!(config[STORAGE_KEYS.API_ENDPOINT] &&
                           config[STORAGE_KEYS.API_KEY] &&
                           config[STORAGE_KEYS.MODEL]);
@@ -262,7 +336,7 @@ async function handleSetMode(tabId, mode) {
 
   // Check if configured before allowing non-deactivated modes
   if (mode !== MODES.DEACTIVATED && mode !== MODES.UNINITIALIZED) {
-    const config = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
+    const config = await Storage.get(Object.values(STORAGE_KEYS));
     const isConfigured = !!(config[STORAGE_KEYS.API_ENDPOINT] &&
                             config[STORAGE_KEYS.API_KEY] &&
                             config[STORAGE_KEYS.MODEL]);
