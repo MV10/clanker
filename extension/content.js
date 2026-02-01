@@ -293,10 +293,16 @@
   /**
    * Handle mode change from context menu
    */
-  function handleModeChange(newMode) {
+  async function handleModeChange(newMode) {
     const oldMode = state.mode;
-    state.mode = newMode;
 
+    // Ignore if mode hasn't actually changed
+    if (oldMode === newMode) {
+      console.log(`[Clanker] Mode unchanged: ${newMode}`);
+      return;
+    }
+
+    state.mode = newMode;
     console.log(`[Clanker] Mode changed: ${oldMode} -> ${newMode}`);
 
     // Cancel any pending response when deactivating
@@ -304,17 +310,77 @@
       cancelPendingResponse();
     }
 
-    // Show notification for mode changes
-    switch (newMode) {
-      case MODES.ACTIVE:
-        showNotification('Active mode - AI will participate in the conversation', 'info');
-        break;
-      case MODES.AVAILABLE:
-        showNotification('Available mode - AI will respond when mentioned', 'info');
-        break;
-      case MODES.DEACTIVATED:
-        showNotification('Deactivated - AI is not monitoring this conversation', 'info');
-        break;
+    // Insert mode change messages into the conversation (no popup notifications for these)
+    if (oldMode === MODES.DEACTIVATED && newMode === MODES.AVAILABLE) {
+      // Extension-only message for available mode
+      sendMessage('[clanker] AI is available but will only reply if you address it directly by name.');
+    } else if (oldMode === MODES.DEACTIVATED && newMode === MODES.ACTIVE) {
+      // LLM generates activation message
+      generateActivationMessage();
+    } else if ((oldMode === MODES.ACTIVE || oldMode === MODES.AVAILABLE) && newMode === MODES.DEACTIVATED) {
+      // Extension-only message for deactivation, then request debugger detach
+      await sendMessage('[clanker] The AI has been deactivated for this conversation.');
+      // Request debugger detach after message is sent
+      chrome.runtime.sendMessage({ type: 'DETACH_DEBUGGER' }).catch(() => {});
+    }
+  }
+
+  /**
+   * Generate LLM activation message when entering Active mode
+   */
+  async function generateActivationMessage() {
+    const { recentMessages, olderMessageCount } = buildConversationHistory();
+    const basePrompt = buildSystemPrompt(olderMessageCount);
+
+    // Add one-time instruction for activation message - explicitly tell it NOT to request images
+    const systemPrompt = basePrompt + '\n\n' +
+      'SPECIAL INSTRUCTION: You have just been activated. ' +
+      'Generate a brief, friendly message indicating you are now active and ready to participate. ' +
+      'Keep it casual and short (one sentence). Do not ask questions, just announce your presence. ' +
+      'You MUST respond with a message, not a requestImage or null response. ' +
+      'Example: {"response": "Hey everyone, I\'m here and ready to chat!"}';
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'SEND_TO_LLM',
+        payload: {
+          messages: recentMessages,
+          systemPrompt,
+          summary: state.conversationSummary,
+          customization: state.conversationCustomization
+        }
+      });
+
+      // Check for valid text response (not a requestImage or other special response)
+      const hasValidMessage = response.success &&
+        response.content &&
+        typeof response.content === 'string' &&
+        !response.content.startsWith('{') &&
+        !response.requestImage;
+
+      if (hasValidMessage) {
+        sendMessage(`[clanker] ${response.content}`);
+
+        // Save any summary/customization updates
+        if (response.summary) {
+          await saveConversationSummary(response.summary);
+        }
+        if (response.customization !== undefined) {
+          await saveConversationCustomization(response.customization);
+        }
+      } else {
+        // Fallback if LLM didn't return a proper message
+        sendMessage('[clanker] AI is now active and participating in this conversation.');
+        if (!response.success) {
+          console.error('[Clanker] Failed to generate activation message:', response.error);
+        } else {
+          console.warn('[Clanker] LLM returned non-message response for activation, using fallback');
+        }
+      }
+    } catch (error) {
+      // Fallback if request fails
+      sendMessage('[clanker] AI is now active and participating in this conversation.');
+      console.error('[Clanker] Failed to generate activation message:', error);
     }
   }
 
@@ -463,12 +529,24 @@
   }
 
   /**
-   * Show warning banner to user
+   * Show warning banner to user with dismiss button
    */
   function showWarning(message) {
     const banner = document.createElement('div');
     banner.className = 'clanker-warning';
-    banner.textContent = `[Clanker] ${message}`;
+
+    const text = document.createElement('span');
+    text.className = 'clanker-warning-text';
+    text.textContent = `[Clanker] ${message}`;
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.className = 'clanker-warning-dismiss';
+    dismissBtn.textContent = '✕';
+    dismissBtn.setAttribute('aria-label', 'Dismiss');
+    dismissBtn.addEventListener('click', () => banner.remove());
+
+    banner.appendChild(text);
+    banner.appendChild(dismissBtn);
     document.body.appendChild(banner);
     console.warn('[Clanker]', message);
   }
@@ -911,50 +989,23 @@
   }
 
   /**
-   * Send a message using the page's input field
+   * Send a message using main world injection via background script
+   * This ensures Angular recognizes the input and click
    */
-  function sendMessage(text) {
-    const inputField = Parser.getInputField();
-    const sendButton = Parser.getSendButton();
-
-    if (!inputField) {
-      console.error('[Clanker] Cannot find input field');
-      return;
-    }
-
-    // Set input field content
-    inputField.focus();
-    inputField.textContent = text;
-
-    // Dispatch input event to trigger framework updates
-    inputField.dispatchEvent(new InputEvent('input', {
-      bubbles: true,
-      cancelable: true,
-      inputType: 'insertText',
-      data: text
-    }));
-
-    inputField.dispatchEvent(new Event('change', { bubbles: true }));
-
-    console.log('[Clanker] Sending message:', text);
-
-    // Click send button or press Enter
-    if (sendButton) {
-      setTimeout(() => {
-        sendButton.click();
-        console.log('[Clanker] Clicked send button');
-      }, 150);
-    } else {
-      setTimeout(() => {
-        inputField.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'Enter',
-          code: 'Enter',
-          keyCode: 13,
-          which: 13,
-          bubbles: true
-        }));
-        console.log('[Clanker] Pressed Enter key');
-      }, 150);
+  async function sendMessage(text) {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'SEND_CHAT_MESSAGE',
+        text: text
+      });
+      if (!response.success) {
+        showNotification('Failed to send message: ' + response.error, 'error');
+      }
+      return response.success;
+    } catch (err) {
+      console.error('[Clanker] Send message error:', err);
+      showNotification('Failed to send message', 'error');
+      return false;
     }
   }
 

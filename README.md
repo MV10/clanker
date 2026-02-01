@@ -25,3 +25,5 @@ Once it is configured, the context menu options become available:
 * Active - the conversation is sent to the AI for processing for every response
 
 New conversations are always in Disabled mode. It will remember which mode a conversation was in and restore it when the conversation is re-selected.
+
+Because Google uses the hideous abomination known as Angular, interaction with the page is difficult (specifically, clicking that "Send" button). When an AI is active the extension has to put the page into debug mode to simulate user keyboard input. Debug mode shows an ugly banner at the top of your window. Do not dismiss the banner, that will disable the interaction (it detaches the debugger).

@@ -5,7 +5,9 @@
   "description": "Allow an OpenAI-compliant LLM to participate in Google Messages SMS conversations",
   "permissions": [
     "activeTab",
-    "contextMenus"
+    "contextMenus",
+    "scripting",
+    "debugger"
   ],
   "host_permissions": [
     "https://messages.google.com/*"
@@ -20,8 +22,8 @@
       "css": ["content.css"]
     }
   ],
+  "options_page": "popup.html",
   "action": {
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

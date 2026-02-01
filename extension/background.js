@@ -42,6 +42,11 @@ const MENU_IDS = {
 const tabModes = new Map();
 
 /**
+ * Track which tabs have debugger attached
+ */
+const debuggerAttached = new Set();
+
+/**
  * Message handler for communication with popup and content scripts
  */
 // addListener is still valid for extensions, it is deprecated for DOM scripts
@@ -75,6 +80,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       sendResponse({ success: true });
       return false;
+
+    case 'CLICK_ELEMENT':
+      // Click an element by ID using main world injection
+      handleClickElement(sender.tab?.id, message.elementId).then(sendResponse);
+      return true;
+
+    case 'SEND_CHAT_MESSAGE':
+      // Send a chat message using main world injection
+      handleSendMessage(sender.tab?.id, message.text).then(sendResponse);
+      return true;
+
+    case 'DETACH_DEBUGGER':
+      // Content script requests debugger detach (after deactivation message sent)
+      detachDebugger(sender.tab?.id).then(() => sendResponse({ success: true }));
+      return true;
 
     default:
       console.warn('Unknown message type:', message.type);
@@ -262,14 +282,19 @@ function parseLLMResponse(content) {
 
     const parsed = JSON.parse(jsonStr);
 
-    // Response can be a string or null (LLM chose not to respond)
-    if (typeof parsed.response === 'string' || parsed.response === null) {
+    // Check if this looks like a valid structured response
+    const hasResponse = typeof parsed.response === 'string' || parsed.response === null;
+    const hasRequestImage = typeof parsed.requestImage === 'string';
+    const hasSummary = typeof parsed.summary === 'string';
+    const hasCustomization = 'customization' in parsed;
+
+    // Accept if it has any of the expected fields
+    if (hasResponse || hasRequestImage || hasSummary || hasCustomization) {
       return {
-        response: parsed.response,
-        summary: typeof parsed.summary === 'string' ? parsed.summary : null,
-        requestImage: typeof parsed.requestImage === 'string' ? parsed.requestImage : null,
-        // Customization can be a string (set/update) or null (clear) or undefined (no change)
-        customization: parsed.customization
+        response: hasResponse ? parsed.response : null,
+        summary: hasSummary ? parsed.summary : null,
+        requestImage: hasRequestImage ? parsed.requestImage : null,
+        customization: hasCustomization ? parsed.customization : undefined
       };
     }
   } catch (e) {
@@ -278,6 +303,137 @@ function parseLLMResponse(content) {
 
   // Fallback: treat entire content as the response
   return { response: content, summary: null, requestImage: null };
+}
+
+/**
+ * Click an element by ID using main world script injection
+ */
+async function handleClickElement(tabId, elementId) {
+  if (!tabId || !elementId) {
+    return { success: false, error: 'Missing tab ID or element ID' };
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: (id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.removeAttribute('id');
+          el.click();
+          return true;
+        }
+        return false;
+      },
+      args: [elementId]
+    });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Send a message by setting textarea value and clicking send - all in main world
+ */
+async function handleSendMessage(tabId, text) {
+  if (!tabId || !text) {
+    return { success: false, error: 'Missing tab ID or text' };
+  }
+
+  try {
+    // Step 1: Set the textarea value using execCommand to simulate real typing
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: (messageText) => {
+        const textarea = document.querySelector('[data-e2e-message-input-box]');
+        if (!textarea) {
+          return false;
+        }
+
+        // Focus the textarea
+        textarea.focus();
+
+        // Clear existing content
+        textarea.select();
+        document.execCommand('delete', false, null);
+
+        // Insert new text using execCommand (simulates actual typing)
+        const inserted = document.execCommand('insertText', false, messageText);
+
+        if (!inserted) {
+          // Fallback to native setter
+          const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+          nativeSetter.call(textarea, messageText);
+        }
+
+        // Dispatch multiple events to ensure Angular picks up the change
+        textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+        textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+
+        return true;
+      },
+      args: [text]
+    });
+
+    // Step 2: Brief wait for Angular to process
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Step 3: Use debugger (already attached) to focus textarea and send Enter
+    if (!debuggerAttached.has(tabId)) {
+      return { success: false, error: 'Debugger not attached - is the extension active?' };
+    }
+
+    try {
+      // Get document root and find textarea
+      const doc = await chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument');
+      const nodeResult = await chrome.debugger.sendCommand({ tabId }, 'DOM.querySelector', {
+        nodeId: doc.root.nodeId,
+        selector: '[data-e2e-message-input-box]'
+      });
+
+      if (!nodeResult.nodeId) {
+        return { success: false, error: 'Could not find message input' };
+      }
+
+      // Focus the textarea via CDP
+      await chrome.debugger.sendCommand({ tabId }, 'DOM.focus', {
+        nodeId: nodeResult.nodeId
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Send trusted Enter key event to submit the message
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13
+      });
+
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13
+      });
+
+      return { success: true };
+    } catch (error) {
+      // If debugger was detached externally, update our tracking
+      if (error.message?.includes('not attached')) {
+        debuggerAttached.delete(tabId);
+      }
+      return { success: false, error: error.message };
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 }
 
 /**
@@ -323,6 +479,48 @@ async function handleGetMode(tabId) {
 }
 
 /**
+ * Attach debugger to a tab for message sending
+ */
+async function attachDebugger(tabId) {
+  if (debuggerAttached.has(tabId)) {
+    console.log('[Clanker] Debugger already attached to tab', tabId);
+    return true;
+  }
+
+  try {
+    console.log('[Clanker] Attaching debugger to tab', tabId);
+    await chrome.debugger.attach({ tabId }, '1.3');
+    debuggerAttached.add(tabId);
+    console.log('[Clanker] Debugger attached to tab', tabId);
+    return true;
+  } catch (error) {
+    console.error('[Clanker] Failed to attach debugger:', error);
+    return false;
+  }
+}
+
+/**
+ * Detach debugger from a tab
+ */
+async function detachDebugger(tabId) {
+  if (!debuggerAttached.has(tabId)) {
+    return true;
+  }
+
+  try {
+    console.log('[Clanker] Detaching debugger from tab', tabId);
+    await chrome.debugger.detach({ tabId });
+    debuggerAttached.delete(tabId);
+    console.log('[Clanker] Debugger detached from tab', tabId);
+    return true;
+  } catch (error) {
+    console.error('[Clanker] Failed to detach debugger:', error);
+    debuggerAttached.delete(tabId); // Remove from set anyway
+    return false;
+  }
+}
+
+/**
  * Set mode for a tab
  */
 async function handleSetMode(tabId, mode) {
@@ -346,8 +544,19 @@ async function handleSetMode(tabId, mode) {
     }
   }
 
+  const oldMode = tabModes.get(tabId) || MODES.DEACTIVATED;
   tabModes.set(tabId, mode);
   await updateContextMenuForTab(tabId);
+
+  // Manage debugger attachment based on mode
+  if (mode === MODES.ACTIVE || mode === MODES.AVAILABLE) {
+    // Attach debugger when entering active modes
+    if (oldMode === MODES.DEACTIVATED || oldMode === MODES.UNINITIALIZED) {
+      await attachDebugger(tabId);
+    }
+  }
+  // Note: Don't detach debugger here when deactivating - let content script
+  // send deactivation message first, then it will request detach
 
   // Notify the content script
   try {
@@ -475,8 +684,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       break;
 
     case MENU_IDS.SETTINGS:
-      // Open the popup/settings
-      chrome.action.openPopup();
+      // Open the options page in a new tab
+      chrome.runtime.openOptionsPage();
       break;
   }
 });
@@ -497,6 +706,49 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 // noinspection JSDeprecatedSymbols
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabModes.delete(tabId);
+  debuggerAttached.delete(tabId); // Debugger auto-detaches on tab close
+});
+
+/**
+ * Handle debugger detach (user cancelled or browser detached)
+ */
+// noinspection JSDeprecatedSymbols
+chrome.debugger.onDetach.addListener((source, reason) => {
+  const tabId = source.tabId;
+  console.log('[Clanker] Debugger detached from tab', tabId, 'reason:', reason);
+  debuggerAttached.delete(tabId);
+
+  // If user cancelled, revert to deactivated mode
+  if (reason === 'canceled_by_user') {
+    tabModes.set(tabId, MODES.DEACTIVATED);
+    updateContextMenuForTab(tabId);
+    // Notify content script
+    chrome.tabs.sendMessage(tabId, { type: 'MODE_CHANGED', mode: MODES.DEACTIVATED }).catch(() => {});
+  }
+});
+
+/**
+ * Handle tab URL changes - detach debugger if navigating away from Google Messages
+ */
+// noinspection JSDeprecatedSymbols
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.url && debuggerAttached.has(tabId)) {
+    const isGoogleMessages = changeInfo.url.startsWith('https://messages.google.com/');
+    if (!isGoogleMessages) {
+      console.log('[Clanker] Tab navigated away from Google Messages, detaching debugger');
+      await detachDebugger(tabId);
+      tabModes.set(tabId, MODES.DEACTIVATED);
+    }
+  }
+});
+
+/**
+ * Handle toolbar icon click - open options page
+ */
+// addListener is still valid for extensions, it is deprecated for DOM scripts
+// noinspection JSDeprecatedSymbols
+chrome.action.onClicked.addListener(() => {
+  chrome.runtime.openOptionsPage();
 });
 
 /**

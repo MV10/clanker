@@ -224,8 +224,17 @@ The extension operates in one of four modes, controlled via a browser context me
 ## Context Menu
 * Right-click on the Google Messages page to access the Clanker menu
 * Mode options are shown as radio buttons with a checkmark on the active mode
-* "Settings..." opens the configuration popup
+* "Settings..." opens the configuration page
 * Mode options are disabled when in Uninitialized mode
+
+## Mode Transition Messages
+When modes change, the extension inserts a message to inform conversation participants:
+
+* **Deactivated → Available**: Extension inserts "[clanker] AI is available but will only reply if you address it directly by name."
+* **Deactivated → Active**: LLM generates a brief activation message (e.g., "Hey everyone, I'm here!")
+* **Active → Deactivated** or **Available → Deactivated**: Extension inserts "[clanker] The AI has been deactivated for this conversation."
+
+The LLM-generated activation message receives context about the conversation and a one-time instruction to announce its presence briefly and casually.
 
 # Extension Storage
 
