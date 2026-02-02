@@ -907,7 +907,33 @@
   }
 
   /**
+   * Check if user is currently composing a message
+   * Checks actual input content rather than relying on cached state
+   */
+  function isUserTyping() {
+    const inputContainer = Parser.getInputField();
+    if (!inputContainer) {
+      console.log('[Clanker] isUserTyping: no input field found');
+      return false;
+    }
+
+    // Find the actual editable element (contenteditable div inside the container)
+    const editableElement = inputContainer.querySelector('[contenteditable="true"]') || inputContainer;
+
+    // Get just the text content of the editable area
+    const content = editableElement.textContent.trim();
+
+    // Filter out known UI text that isn't user input
+    const isUIText = /^(SMS|RCS)(\s+(SMS|RCS))*$/i.test(content);
+    const isTyping = content.length > 0 && !isUIText;
+
+    console.log('[Clanker] isUserTyping:', isTyping, 'content:', JSON.stringify(content));
+    return isTyping;
+  }
+
+  /**
    * Set up observer for user typing in input field
+   * Updates cached state for quick checks, but isUserTyping() is authoritative
    */
   function setupInputObserver() {
     const inputSelector = `${Selectors.INPUT_FIELD}, ${Selectors.INPUT_BOX}`;
@@ -919,9 +945,10 @@
       }
     }, true);
 
+    // On focus, check if there's actual content (don't assume typing just from focus)
     document.addEventListener('focusin', (event) => {
       if (event.target.matches && event.target.matches(inputSelector)) {
-        state.userTyping = true;
+        state.userTyping = event.target.textContent.trim().length > 0;
       }
     }, true);
 
@@ -1085,7 +1112,8 @@
         return;
       }
 
-      if (state.userTyping) {
+      // Check actual input content, not just cached state
+      if (isUserTyping()) {
         console.log('[Clanker] User is typing, skipping response');
         return;
       }
