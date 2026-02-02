@@ -1,8 +1,6 @@
 # clanker
 
-> PROCEED WITH CAUTION (but it seems to work...)
-
-Clanker is an experimental Chromium browser extension which allows an OpenAI-compliant LLM such as Grok, ChatGPT or even locally-hosted AIs to participate in your Google Messages SMS conversations.
+Clanker is an _**experimental**_ Chromium browser extension which allows an OpenAI-compliant LLM such as Grok, ChatGPT or even locally-hosted AIs to participate in your Google Messages SMS conversations.
 
 You will require an API key but costs should be very low. Analysis of a real, active, 3 hour conversation between two people estimated participation by the Grok _grok-4-1-fast-non-reasoning_ model would incur around one cent of processing time using January 2026 pricing, and assuming no image processing.
 
@@ -20,7 +18,7 @@ To update, either pull the latest changes to your clone, or delete and re-clone.
 
 ## Configuration & Usage
 
-Navigate to https://messages.google.com and select a conversation, then right-click in the browser window. You will see a `Clanker` sub-menu where you can modify the settings like your API key, user name (in case the AI wishes to address you specifically; your name is not visible in the chat data, unlike other participants).
+Navigate to https://messages.google.com and select a conversation, then right-click in the browser window. You will see a `Clanker` sub-menu where you can modify the settings like your API endpoint and key, and your user name (which is used the AI wishes to address you specifically; your name is not visible in the chat data, unlike other participants).
 
 Once it is configured, the context menu options become available:
 
@@ -30,9 +28,9 @@ Once it is configured, the context menu options become available:
 
 New conversations are always in Disabled mode. It will remember which mode a conversation was in and restore it when the conversation is re-selected.
 
-The LLM can request images that are in the chat, video or other attachment types are filtered out.
+The LLM can request a copy of images that are in the recent chat history. Video or other attachment types are filtered out.
 
-The extension works with the current conversation only. If you have it Available or Active in a conversation and switch to a different one, other people sending texts in the first one won't get any LLM responses until you switch back to that conversation. 
+The extension works with the current conversation only. If you have it Available or Active in a conversation and switch to a different conversation, other people sending texts to the first one won't get any LLM responses until you switch back to that conversation.
 
 ## Comments, Troubleshooting, etc.
 

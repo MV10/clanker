@@ -712,7 +712,7 @@ async function handleDiagResetAll(tabId) {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        return confirm('Reset ALL Clanker state data?\n\nThis will delete all stored data for all conversations including modes, summaries, and customizations.\n\nThis action cannot be undone.');
+        return confirm('Reset ALL Clanker state data?\n\nThis will delete all stored data for all conversations including modes, summaries, and customizations.\n\nConfiguration (API key, model, etc.) will be preserved.\n\nThis action cannot be undone.');
       }
     });
 
@@ -720,8 +720,23 @@ async function handleDiagResetAll(tabId) {
       return; // User cancelled
     }
 
+    // Save configuration before clearing
+    const configKeys = Object.values(STORAGE_KEYS);
+    const savedConfig = await Storage.get(configKeys);
+
     // Clear all IndexedDB storage
     await Storage.clear();
+
+    // Restore configuration
+    const configToRestore = {};
+    for (const key of configKeys) {
+      if (savedConfig[key] !== undefined) {
+        configToRestore[key] = savedConfig[key];
+      }
+    }
+    if (Object.keys(configToRestore).length > 0) {
+      await Storage.set(configToRestore);
+    }
 
     // Tell content script to reinitialize
     await chrome.tabs.sendMessage(tabId, { type: 'DIAG_REINITIALIZE' });
@@ -729,7 +744,7 @@ async function handleDiagResetAll(tabId) {
     // Set mode to deactivated
     await handleSetMode(tabId, MODES.DEACTIVATED);
 
-    console.log('[Clanker] All state data reset');
+    console.log('[Clanker] All state data reset (configuration preserved)');
 
   } catch (error) {
     console.error('[Clanker] Reset all error:', error);
