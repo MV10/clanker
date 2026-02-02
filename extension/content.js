@@ -66,7 +66,10 @@
     pendingResponseTimer: null,
     pendingResponseMessageId: null,
     currentConversationId: null,
-    config: null
+    config: null,
+    // Concurrency control for LLM requests
+    llmRequestId: 0,        // Incremented each time a response is triggered
+    llmInFlight: false      // True while an LLM request is active
   };
 
   /**
@@ -428,6 +431,7 @@
       state.conversationCustomization = null;
       state.processedMessageIds.clear();
       state.currentConversationId = null;
+      state.llmInFlight = false;
       cancelPendingResponse();
 
       // Re-detect conversation and parse
@@ -491,17 +495,16 @@
     }
 
     // Insert mode change messages into the conversation (no popup notifications for these)
-    if (oldMode === MODES.DEACTIVATED && newMode === MODES.AVAILABLE) {
-      // Extension-only message for available mode
-      sendMessage('[clanker] AI is available but will only reply if you address it directly by name.');
-    } else if (oldMode === MODES.DEACTIVATED && newMode === MODES.ACTIVE) {
-      // LLM generates activation message
-      generateActivationMessage();
-    } else if ((oldMode === MODES.ACTIVE || oldMode === MODES.AVAILABLE) && newMode === MODES.DEACTIVATED) {
-      // Extension-only message for deactivation, then request debugger detach
+    if (newMode === MODES.DEACTIVATED) {
+      // Any mode -> Deactivated: announce and detach debugger
       await sendMessage('[clanker] The AI has been deactivated for this conversation.');
-      // Request debugger detach after message is sent
       chrome.runtime.sendMessage({ type: 'DETACH_DEBUGGER' }).catch(() => {});
+    } else if (newMode === MODES.ACTIVE) {
+      // Any mode -> Active: LLM generates activation message
+      generateActivationMessage();
+    } else if (newMode === MODES.AVAILABLE) {
+      // Any mode -> Available: static message
+      sendMessage('[clanker] AI is available but will only reply if you address it directly by name.');
     }
   }
 
@@ -509,6 +512,18 @@
    * Generate LLM activation message when entering Active mode
    */
   async function generateActivationMessage() {
+    // Check if another LLM request is already in flight
+    if (state.llmInFlight) {
+      console.log('[Clanker] LLM request in flight, using fallback activation message');
+      sendMessage('[clanker] AI is now active and participating in this conversation.');
+      return;
+    }
+
+    // Increment request ID and mark as in-flight
+    state.llmRequestId++;
+    const requestId = state.llmRequestId;
+    state.llmInFlight = true;
+
     const { recentMessages, olderMessageCount } = buildConversationHistory();
     const basePrompt = buildSystemPrompt(olderMessageCount);
 
@@ -530,6 +545,12 @@
           customization: state.conversationCustomization
         }
       });
+
+      // Check if this request was superseded while waiting for LLM
+      if (requestId !== state.llmRequestId) {
+        console.log('[Clanker] Activation request superseded, discarding response');
+        return;
+      }
 
       // Check for valid text response (not a requestImage or other special response)
       const hasValidMessage = response.success &&
@@ -561,6 +582,8 @@
       // Fallback if request fails
       sendMessage('[clanker] AI is now active and participating in this conversation.');
       console.error('[Clanker] Failed to generate activation message:', error);
+    } finally {
+      state.llmInFlight = false;
     }
   }
 
@@ -786,7 +809,7 @@
   }
 
   /**
-   * Cancel any pending response
+   * Cancel any pending response and invalidate in-flight requests
    */
   function cancelPendingResponse() {
     if (state.pendingResponseTimer) {
@@ -795,6 +818,9 @@
       state.pendingResponseMessageId = null;
       console.log('[Clanker] Cancelled pending response');
     }
+    // Increment request ID to invalidate any in-flight LLM requests
+    // The in-flight request will check this ID before sending its response
+    state.llmRequestId++;
   }
 
   /**
@@ -1044,10 +1070,20 @@
   function scheduleResponse(triggerMessage) {
     cancelPendingResponse();
 
+    // Increment request ID to invalidate any in-flight requests
+    state.llmRequestId++;
+    const requestId = state.llmRequestId;
+
     state.pendingResponseMessageId = triggerMessage.id;
     state.pendingResponseTimer = setTimeout(async () => {
       state.pendingResponseTimer = null;
       state.pendingResponseMessageId = null;
+
+      // Check if this request was superseded by a newer one
+      if (requestId !== state.llmRequestId) {
+        console.log('[Clanker] Request superseded, skipping response');
+        return;
+      }
 
       if (state.userTyping) {
         console.log('[Clanker] User is typing, skipping response');
@@ -1060,17 +1096,28 @@
         return;
       }
 
-      await generateAndSendResponse(triggerMessage);
+      // Check if another LLM request is already in flight
+      if (state.llmInFlight) {
+        console.log('[Clanker] LLM request already in flight, skipping');
+        return;
+      }
+
+      await generateAndSendResponse(requestId);
     }, state.responseDelayMs);
 
-    console.log('[Clanker] Scheduled response to message:', triggerMessage.id);
+    console.log('[Clanker] Scheduled response to message:', triggerMessage.id, '(request', requestId + ')');
   }
 
   /**
    * Generate LLM response and send it
+   * @param {number} requestId - The request ID to validate against
    */
-  async function generateAndSendResponse() {
-    console.log('[Clanker] Generating LLM response...');
+  async function generateAndSendResponse(requestId) {
+    console.log('[Clanker] Generating LLM response (request', requestId + ')...');
+
+    // Mark request as in-flight
+    state.llmInFlight = true;
+
     const { recentMessages, olderMessageCount } = buildConversationHistory();
     const systemPrompt = buildSystemPrompt(olderMessageCount);
 
@@ -1105,6 +1152,12 @@
         response = await handleImageRequest(response.requestImage, recentMessages, systemPrompt);
       }
 
+      // Check if this request was superseded while waiting for LLM
+      if (requestId !== state.llmRequestId) {
+        console.log('[Clanker] Request', requestId, 'superseded by', state.llmRequestId, '- discarding response');
+        return;
+      }
+
       if (response.success) {
         // LLM can return null response if it decides not to reply
         if (response.content) {
@@ -1129,6 +1182,9 @@
     } catch (error) {
       console.error('[Clanker] Failed to get LLM response:', error);
       showNotification('Unable to reach the AI service. Check your connection.', 'error');
+    } finally {
+      // Always clear in-flight flag
+      state.llmInFlight = false;
     }
   }
 
