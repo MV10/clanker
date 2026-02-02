@@ -21,7 +21,9 @@
  * @typedef {Object} ParsedMessage
  * @property {string} id - Unique message ID from DOM or generated fallback
  * @property {string} sender - Name of the message sender ("You" for local user, or phone number)
- * @property {string} content - Message text content
+ * @property {string} content - Message text content (or "[IMAGE]" for image-only messages)
+ * @property {string} type - Message type: "text", "image", or "text+image"
+ * @property {string|null} imageSrc - Blob URL for image messages, null otherwise
  * @property {boolean} isLocalUser - True if sent by the local user
  * @property {boolean} isOutgoing - True if message direction is "Sent"
  * @property {boolean} isClanker - True if this is a Clanker-generated message
@@ -31,20 +33,11 @@
  */
 
 /**
- * Data structure for an image attachment
- * @typedef {Object} ImageAttachment
- * @property {string} src - Image source URL (blob URL)
- * @property {string} alt - Alt text or description
- * @property {string} messageId - ID of the message containing this image
- */
-
-/**
  * Data structure for conversation context
  * @typedef {Object} ConversationContext
  * @property {string} conversationId - Unique identifier for the conversation
  * @property {Set<string>} participants - Set of participant names
- * @property {ParsedMessage[]} messages - Array of parsed messages
- * @property {ImageAttachment[]} images - Array of image attachments
+ * @property {ParsedMessage[]} messages - Array of parsed messages (includes images in sequence)
  * @property {number} messageCount - Total number of messages parsed
  */
 
@@ -63,17 +56,14 @@ const ClankerSelectors = {
   CONVERSATION_CONTAINER: '[data-e2e-conversation-container]',
   CONVERSATION_THREAD: 'mws-messages-list',
 
-  // Message elements
+  // Message elements - wrapper contains the message ID
   MESSAGE_WRAPPER: '[data-e2e-message-wrapper]',
-  MESSAGE_TEXT: 'mws-text-message-part[data-e2e-text-message-content]',
-  MESSAGE_IMAGE: 'mws-image-message-part',
+  MESSAGE_WRAPPER_CORE: '[data-e2e-message-wrapper-core]',
   MESSAGE_ID_ATTR: 'data-e2e-message-id',
 
-  // Text content (aria-label is on this element)
-  MESSAGE_CONTENT: 'mws-text-message-part',
-
-  // Image sources
-  IMAGE_BLOB: 'img[src^="blob:https://messages.google.com/"]',
+  // Message parts (children of wrapper)
+  MESSAGE_TEXT_PART: 'mws-text-message-part',
+  MESSAGE_IMAGE_PART: 'mws-image-message-part',
 
   // Input controls
   INPUT_FIELD: '[data-e2e-message-input]',
@@ -90,15 +80,29 @@ const ClankerSelectors = {
 /**
  * Regex patterns for parsing message content
  * UPDATE THESE when Google changes their aria-label format
+ *
+ * Text message aria-label format:
+ *   "NAME said: MESSAGE. Sent/Received on DATE at TIME. STATUS."
+ *   Example: "You said: Hello. Sent on January 1, 2026 at 12:00 PM. SMS."
+ *
+ * Image message aria-label format:
+ *   "NAME sent an image. Sent/Received on DATE at TIME. STATUS."
+ *   Example: "You sent an image. Sent on January 1, 2026 at 4:23 PM. Delivered."
+ *
+ * Reaction aria-label format:
+ *   "NAME said: Laughed at "MESSAGE". Received on DATE at TIME."
+ *   "NAME said: Laughed at an image. Received on DATE at TIME."
  */
 const ClankerPatterns = {
-  // Matches: "NAME said: MESSAGE. Sent/Received on DATE at TIME. [Read.] [REACTIONS]"
-  // Captures: (1) sender, (2) content, (3) direction, (4) timestamp, (5) optional reactions suffix
-  // Note: Content may include periods (sentences, emojis, etc.)
-  MESSAGE_ARIA_LABEL: /^(.+?)\s+said:\s*(.*?)\.\s*(Sent|Received)\s+on\s+([^.]+(?:\s+at\s+[^.]+)?)\.((?:\s+Read\.)?(?:\s+.+\s+reacted\s+with\s+.+)*)$/i,
+  // Text message: "NAME said: MESSAGE. Sent/Received on DATE at TIME. STATUS."
+  // Captures: (1) sender, (2) content, (3) direction, (4) timestamp
+  // Note: Content uses [\s\S]*? to match across potential newlines, non-greedy
+  // The timestamp is everything after "on " until the next period
+  TEXT_MESSAGE: /^(.+?)\s+said:\s*([\s\S]*?)\.\s*(Sent|Received)\s+on\s+([^.]+)\./i,
 
-  // Fallback: captures up to Sent/Received, handles messages without reactions
-  MESSAGE_ARIA_LABEL_FALLBACK: /^(.+?)\s+said:\s*(.*?)\.\s*(Sent|Received)\s+on\s+/i,
+  // Image message: "NAME sent an image. Sent/Received on DATE at TIME. STATUS."
+  // Captures: (1) sender, (2) direction, (3) timestamp
+  IMAGE_MESSAGE: /^(.+?)\s+sent an image\.\s*(Sent|Received)\s+on\s+([^.]+)\./i,
 
   // Matches individual reactions: "NAME reacted with TYPE." or "NAME and NAME reacted with TYPE."
   // Used to parse the reactions suffix captured by MESSAGE_ARIA_LABEL
@@ -115,7 +119,7 @@ const ClankerPatterns = {
 const ClankerParser = {
   /**
    * Verify that the expected page structure exists
-   * @returns {{valid: boolean, details: Object}}
+   * @returns {{valid: boolean, hasActiveConversation: boolean, details: Object}}
    */
   verifyPageStructure() {
     const details = {
@@ -123,7 +127,6 @@ const ClankerParser = {
       hasConversationContainer: document.querySelector(ClankerSelectors.CONVERSATION_CONTAINER) !== null,
       hasConversationThread: document.querySelector(ClankerSelectors.CONVERSATION_THREAD) !== null,
       hasMessageWrapper: document.querySelector(ClankerSelectors.MESSAGE_WRAPPER) !== null,
-      hasMessageContent: document.querySelector(ClankerSelectors.MESSAGE_CONTENT) !== null,
       hasInputField: document.querySelector(ClankerSelectors.INPUT_FIELD) !== null ||
                      document.querySelector(ClankerSelectors.INPUT_BOX) !== null,
     };
@@ -131,8 +134,7 @@ const ClankerParser = {
     // Page is valid if we can find Google Messages elements (sidebar confirms we're on the right page)
     const hasConversation = details.hasConversationContainer ||
                             details.hasConversationThread ||
-                            details.hasMessageWrapper ||
-                            details.hasMessageContent;
+                            details.hasMessageWrapper;
 
     // Valid if we have a conversation OR we have the sidebar (no conversation selected yet)
     const valid = hasConversation || details.hasSidebar;
@@ -186,13 +188,26 @@ const ClankerParser = {
    */
   extractParticipantNames() {
     const participants = new Set();
-    const messages = document.querySelectorAll(ClankerSelectors.MESSAGE_CONTENT);
 
-    for (const el of messages) {
+    // Check text message parts
+    const textParts = document.querySelectorAll(ClankerSelectors.MESSAGE_TEXT_PART);
+    for (const el of textParts) {
       const ariaLabel = el.getAttribute('aria-label');
       if (!ariaLabel) continue;
 
       const match = ariaLabel.match(/^(.+?)\s+said:/i);
+      if (match && match[1] !== 'You') {
+        participants.add(match[1].trim());
+      }
+    }
+
+    // Check image message parts
+    const imageParts = document.querySelectorAll(ClankerSelectors.MESSAGE_IMAGE_PART);
+    for (const el of imageParts) {
+      const ariaLabel = el.getAttribute('aria-label');
+      if (!ariaLabel) continue;
+
+      const match = ariaLabel.match(/^(.+?)\s+sent an image/i);
       if (match && match[1] !== 'You') {
         participants.add(match[1].trim());
       }
@@ -203,82 +218,178 @@ const ClankerParser = {
 
   /**
    * Parse all visible messages in the conversation
+   * Messages are returned in DOM order (which should be chronological)
    * @returns {ConversationContext}
    */
   parseConversation() {
     const conversationId = this.detectConversationId();
     const participants = new Set();
     const messages = [];
-    const messageElements = document.querySelectorAll(ClankerSelectors.MESSAGE_CONTENT);
+    const seenIds = new Set();
 
-    for (const el of messageElements) {
-      const parsed = this.parseMessageElement(el);
+    // Query all message wrapper cores - these contain the message ID
+    const wrappers = document.querySelectorAll(ClankerSelectors.MESSAGE_WRAPPER_CORE);
+
+    for (const wrapper of wrappers) {
+      // Skip tombstones
+      if (this.isTombstone(wrapper)) {
+        continue;
+      }
+
+      const messageId = wrapper.getAttribute(ClankerSelectors.MESSAGE_ID_ATTR);
+      if (!messageId || seenIds.has(messageId)) {
+        continue;
+      }
+      seenIds.add(messageId);
+
+      // Find all parts within this message wrapper
+      const textPart = wrapper.querySelector(ClankerSelectors.MESSAGE_TEXT_PART);
+      const imagePart = wrapper.querySelector(ClankerSelectors.MESSAGE_IMAGE_PART);
+
+      // Parse based on what parts exist
+      let parsed = null;
+
+      if (textPart && imagePart) {
+        // Combo message: text + image
+        parsed = this.parseTextImageMessage(messageId, textPart, imagePart);
+      } else if (textPart) {
+        // Text-only message
+        parsed = this.parseTextMessage(messageId, textPart);
+      } else if (imagePart) {
+        // Image-only message
+        parsed = this.parseImageMessage(messageId, imagePart);
+      }
+
       if (parsed) {
         messages.push(parsed);
         participants.add(parsed.sender);
       }
     }
 
-    const images = this.findAllImages();
-
     return {
       conversationId,
       participants,
       messages,
-      images,
       messageCount: messages.length,
     };
   },
 
   /**
-   * Parse a single message element
-   * @param {Element} element
+   * Parse a text-only message
+   * @param {string} messageId
+   * @param {Element} textPart
    * @returns {ParsedMessage|null}
    */
-  parseMessageElement(element) {
-    // Skip tombstone messages (deleted/unsupported content)
-    if (this.isTombstone(element)) {
-      return null;
-    }
-
-    const ariaLabel = element.getAttribute('aria-label');
+  parseTextMessage(messageId, textPart) {
+    const ariaLabel = textPart.getAttribute('aria-label');
     if (!ariaLabel) return null;
 
-    // Try primary pattern first
-    let match = ariaLabel.match(ClankerPatterns.MESSAGE_ARIA_LABEL);
-    let timestamp = '';
-    let reactionsSuffix = '';
-
-    if (match) {
-      timestamp = match[4];
-      reactionsSuffix = match[5] || '';
-    } else {
-      // Try fallback pattern
-      match = ariaLabel.match(ClankerPatterns.MESSAGE_ARIA_LABEL_FALLBACK);
-      if (!match) return null;
-    }
+    const match = ariaLabel.match(ClankerPatterns.TEXT_MESSAGE);
+    if (!match) return null;
 
     const sender = match[1].trim();
     const content = match[2].trim();
     const direction = match[3].toLowerCase();
+    const timestamp = match[4].trim();
 
     const isClanker = sender === 'You' && content.startsWith('[clanker]');
     const isLocalUser = sender === 'You';
     const isOutgoing = direction === 'sent';
 
-    const id = this.getMessageId(element);
-    const reactions = this.parseReactions(reactionsSuffix);
-
     return {
-      id,
+      id: messageId,
       sender,
       content,
+      type: 'text',
+      imageSrc: null,
       isLocalUser,
       isOutgoing,
       isClanker,
       timestamp,
-      reactions,
-      element,
+      reactions: [], // TODO: parse reactions if needed
+      element: textPart,
+    };
+  },
+
+  /**
+   * Parse an image-only message
+   * @param {string} messageId
+   * @param {Element} imagePart
+   * @returns {ParsedMessage|null}
+   */
+  parseImageMessage(messageId, imagePart) {
+    const ariaLabel = imagePart.getAttribute('aria-label');
+    if (!ariaLabel) return null;
+
+    const match = ariaLabel.match(ClankerPatterns.IMAGE_MESSAGE);
+    if (!match) return null;
+
+    const sender = match[1].trim();
+    const direction = match[2].toLowerCase();
+    const timestamp = match[3].trim();
+
+    const isLocalUser = sender === 'You';
+    const isOutgoing = direction === 'sent';
+
+    // Get the image blob URL
+    const img = imagePart.querySelector('img');
+    const imageSrc = img ? img.src : null;
+
+    return {
+      id: messageId,
+      sender,
+      content: '[IMAGE]',
+      type: 'image',
+      imageSrc,
+      isLocalUser,
+      isOutgoing,
+      isClanker: false, // Images can't be Clanker messages
+      timestamp,
+      reactions: [],
+      element: imagePart,
+    };
+  },
+
+  /**
+   * Parse a combo text+image message
+   * @param {string} messageId
+   * @param {Element} textPart
+   * @param {Element} imagePart
+   * @returns {ParsedMessage|null}
+   */
+  parseTextImageMessage(messageId, textPart, imagePart) {
+    // Use text part for main content
+    const textAriaLabel = textPart.getAttribute('aria-label');
+    if (!textAriaLabel) return null;
+
+    const match = textAriaLabel.match(ClankerPatterns.TEXT_MESSAGE);
+    if (!match) return null;
+
+    const sender = match[1].trim();
+    const content = match[2].trim();
+    const direction = match[3].toLowerCase();
+    const timestamp = match[4].trim();
+
+    const isClanker = sender === 'You' && content.startsWith('[clanker]');
+    const isLocalUser = sender === 'You';
+    const isOutgoing = direction === 'sent';
+
+    // Get the image blob URL
+    const img = imagePart.querySelector('img');
+    const imageSrc = img ? img.src : null;
+
+    return {
+      id: messageId,
+      sender,
+      content,
+      type: 'text+image',
+      imageSrc,
+      isLocalUser,
+      isOutgoing,
+      isClanker,
+      timestamp,
+      reactions: [],
+      element: textPart,
     };
   },
 
@@ -300,44 +411,7 @@ const ClankerParser = {
   },
 
   /**
-   * Parse reactions from the aria-label suffix
-   * @param {string} reactionsSuffix - Text after timestamp containing reaction info
-   * @returns {Reaction[]}
-   */
-  parseReactions(reactionsSuffix) {
-    const reactions = [];
-    if (!reactionsSuffix) return reactions;
-
-    // Reset regex state for global matching
-    ClankerPatterns.REACTION.lastIndex = 0;
-
-    let reactionMatch;
-    while ((reactionMatch = ClankerPatterns.REACTION.exec(reactionsSuffix)) !== null) {
-      const reactorsText = reactionMatch[1].trim();
-      const type = reactionMatch[2].toLowerCase();
-
-      // Parse reactor names (handles "You and (228) 324-0037" format)
-      const reactors = this.parseReactorNames(reactorsText);
-
-      reactions.push({ reactors, type });
-    }
-
-    return reactions;
-  },
-
-  /**
-   * Parse reactor names from text like "You and (228) 324-0037" or "Sherry"
-   * @param {string} text
-   * @returns {string[]}
-   */
-  parseReactorNames(text) {
-    // Split by " and " but preserve phone numbers like "(228) 324-0037"
-    const parts = text.split(/\s+and\s+/i);
-    return parts.map(p => p.trim()).filter(p => p.length > 0);
-  },
-
-  /**
-   * Get the stable message ID from the DOM
+   * Get the stable message ID from the DOM element
    * @param {Element} element
    * @returns {string}
    */
@@ -369,54 +443,6 @@ const ClankerParser = {
   },
 
   /**
-   * Find all image attachments in the conversation
-   * @returns {ImageAttachment[]}
-   */
-  findAllImages() {
-    const attachments = [];
-    const seen = new Set();
-
-    // Find image message parts
-    const imageParts = document.querySelectorAll(ClankerSelectors.MESSAGE_IMAGE);
-    for (const part of imageParts) {
-      const img = part.querySelector('img');
-      if (img && img.src && !seen.has(img.src)) {
-        seen.add(img.src);
-        attachments.push({
-          src: img.src,
-          alt: img.alt || 'Image attachment',
-          messageId: this.getMessageId(part),
-        });
-      }
-    }
-
-    // Also find blob images not in message parts
-    const blobImages = document.querySelectorAll(ClankerSelectors.IMAGE_BLOB);
-    for (const img of blobImages) {
-      if (img.src && !seen.has(img.src)) {
-        seen.add(img.src);
-        attachments.push({
-          src: img.src,
-          alt: img.alt || 'Image attachment',
-          messageId: this.getMessageId(img),
-        });
-      }
-    }
-
-    return attachments;
-  },
-
-  /**
-   * Get recent images (for LLM context)
-   * @param {number} limit
-   * @returns {ImageAttachment[]}
-   */
-  getRecentImages(limit = 3) {
-    const allImages = this.findAllImages();
-    return allImages.slice(-limit);
-  },
-
-  /**
    * Check if an element is within the sidebar (should be ignored)
    * @param {Element} element
    * @returns {boolean}
@@ -432,25 +458,97 @@ const ClankerParser = {
   },
 
   /**
-   * Find message elements within a DOM node
+   * Find message part elements within a DOM node (for mutation observer)
    * @param {Element} node
    * @returns {Element[]}
    */
   findMessageElements(node) {
-    const messages = [];
+    const elements = [];
 
-    // Check if node itself is a message
-    if (node.matches && node.matches(ClankerSelectors.MESSAGE_CONTENT)) {
-      messages.push(node);
+    // Check if node itself is a message part
+    if (node.matches) {
+      if (node.matches(ClankerSelectors.MESSAGE_TEXT_PART)) {
+        elements.push(node);
+      }
+      if (node.matches(ClankerSelectors.MESSAGE_IMAGE_PART)) {
+        elements.push(node);
+      }
     }
 
-    // Find messages within the node
+    // Find message parts within the node
     if (node.querySelectorAll) {
-      const found = node.querySelectorAll(ClankerSelectors.MESSAGE_CONTENT);
-      messages.push(...found);
+      const textParts = node.querySelectorAll(ClankerSelectors.MESSAGE_TEXT_PART);
+      const imageParts = node.querySelectorAll(ClankerSelectors.MESSAGE_IMAGE_PART);
+      elements.push(...textParts, ...imageParts);
     }
 
-    return messages;
+    return elements;
+  },
+
+  /**
+   * Parse a single message element (for mutation observer - new message detection)
+   * @param {Element} element - Either a text or image message part
+   * @returns {ParsedMessage|null}
+   */
+  parseMessageElement(element) {
+    // Skip tombstone messages
+    if (this.isTombstone(element)) {
+      return null;
+    }
+
+    const messageId = this.getMessageId(element);
+    const ariaLabel = element.getAttribute('aria-label');
+    if (!ariaLabel) return null;
+
+    // Try text message pattern
+    let match = ariaLabel.match(ClankerPatterns.TEXT_MESSAGE);
+    if (match) {
+      const sender = match[1].trim();
+      const content = match[2].trim();
+      const direction = match[3].toLowerCase();
+      const timestamp = match[4].trim();
+
+      return {
+        id: messageId,
+        sender,
+        content,
+        type: 'text',
+        imageSrc: null,
+        isLocalUser: sender === 'You',
+        isOutgoing: direction === 'sent',
+        isClanker: sender === 'You' && content.startsWith('[clanker]'),
+        timestamp,
+        reactions: [],
+        element,
+      };
+    }
+
+    // Try image message pattern
+    match = ariaLabel.match(ClankerPatterns.IMAGE_MESSAGE);
+    if (match) {
+      const sender = match[1].trim();
+      const direction = match[2].toLowerCase();
+      const timestamp = match[3].trim();
+
+      const img = element.querySelector('img');
+      const imageSrc = img ? img.src : null;
+
+      return {
+        id: messageId,
+        sender,
+        content: '[IMAGE]',
+        type: 'image',
+        imageSrc,
+        isLocalUser: sender === 'You',
+        isOutgoing: direction === 'sent',
+        isClanker: false,
+        timestamp,
+        reactions: [],
+        element,
+      };
+    }
+
+    return null;
   },
 
   /**
@@ -487,8 +585,7 @@ const ClankerParser = {
     return !!(
       document.querySelector(ClankerSelectors.CONVERSATION_CONTAINER) ||
       document.querySelector(ClankerSelectors.CONVERSATION_THREAD) ||
-      document.querySelector(ClankerSelectors.MESSAGE_WRAPPER) ||
-      document.querySelector(ClankerSelectors.MESSAGE_CONTENT)
+      document.querySelector(ClankerSelectors.MESSAGE_WRAPPER)
     );
   },
 };

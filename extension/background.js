@@ -619,6 +619,7 @@ async function handleDiagLog(tabId) {
   <pre>${response.storedCustomization ? escapeHtml(response.storedCustomization) : '<span class="null">null</span>'}</pre>
 
   <h2>Recent Messages (last 20)</h2>
+  <p><em>Note: Images are included in sequence with type "image" or "text+image"</em></p>
   <pre>${escapeHtml(JSON.stringify(response.recentMessages, null, 2))}</pre>
 </body>
 </html>`;

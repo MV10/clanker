@@ -205,21 +205,6 @@
   }
 
   /**
-   * Get all images indexed by message ID for inline placement
-   */
-  function getImagesByMessageId() {
-    const images = Parser.findAllImages();
-    const imageMap = new Map();
-    for (const img of images) {
-      if (!imageMap.has(img.messageId)) {
-        imageMap.set(img.messageId, []);
-      }
-      imageMap.get(img.messageId).push(img);
-    }
-    return imageMap;
-  }
-
-  /**
    * Initialize the extension
    */
   async function initialize() {
@@ -337,12 +322,14 @@
 
       const stored = await Storage.get([modeKey, summaryKey, customizationKey]);
 
-      // Get recent messages from parser
+      // Get recent messages from parser (images are now included in messages array)
       const context = Parser.parseConversation();
       const recentMessages = context.messages.slice(-20).map(m => ({
         id: m.id,
         sender: m.sender,
         content: m.content,
+        type: m.type,
+        imageSrc: m.imageSrc,
         isClanker: m.isClanker,
         timestamp: m.timestamp
       }));
@@ -1127,79 +1114,55 @@
    * Returns recent literal messages (with inline images) and count of older messages
    */
   function buildConversationHistory() {
-    // Re-parse to get current state
+    // Re-parse to get current state (images are now included in messages array)
     const context = Parser.parseConversation();
     const allMessages = context.messages;
-    const imagesByMessage = getImagesByMessageId();
-
-    // Build unified entries: text messages with their associated images
-    const allEntries = [];
-    const seenImageSrcs = new Set();
-
-    for (const msg of allMessages) {
-      // Add text message
-      allEntries.push({
-        type: 'text',
-        id: msg.id,
-        sender: msg.sender,
-        content: msg.content,
-        isClanker: msg.isClanker
-      });
-
-      // Add any images associated with this message
-      const msgImages = imagesByMessage.get(msg.id) || [];
-      for (const img of msgImages) {
-        if (!seenImageSrcs.has(img.src)) {
-          seenImageSrcs.add(img.src);
-          allEntries.push({
-            type: 'image',
-            id: msg.id,
-            sender: msg.sender,
-            src: img.src,
-            alt: img.alt
-          });
-        }
-      }
-    }
-
-    // Handle orphan images (images without a matching text message)
-    for (const [messageId, images] of imagesByMessage) {
-      for (const img of images) {
-        if (!seenImageSrcs.has(img.src)) {
-          seenImageSrcs.add(img.src);
-          allEntries.push({
-            type: 'image',
-            id: messageId,
-            sender: 'Unknown',
-            src: img.src,
-            alt: img.alt
-          });
-        }
-      }
-    }
 
     // Split into older (to be summarized) and recent (sent literally)
-    const recentStart = Math.max(0, allEntries.length - RECENT_MESSAGE_COUNT);
+    const recentStart = Math.max(0, allMessages.length - RECENT_MESSAGE_COUNT);
     const olderMessageCount = recentStart;
-    const recentEntries = allEntries.slice(recentStart);
-
     const recentMessages = [];
-    for (const entry of recentEntries) {
-      if (entry.type === 'text') {
-        const role = entry.isClanker ? 'assistant' : 'user';
-        let content = entry.content;
 
-        if (entry.isClanker) {
+    for (let i = recentStart; i < allMessages.length; i++) {
+      const msg = allMessages[i];
+
+      if (msg.type === 'text') {
+        // Text-only message
+        const role = msg.isClanker ? 'assistant' : 'user';
+        let content = msg.content;
+
+        if (msg.isClanker) {
           content = content.replace(/^\[clanker\]\s*/i, '');
         } else {
-          content = `${entry.sender}: ${content}`;
+          content = `${msg.sender}: ${content}`;
         }
 
         recentMessages.push({ role, content });
-      } else if (entry.type === 'image') {
-        // Images appear as user messages with special format
-        const content = `${entry.sender}: [IMAGE: ${entry.src}]${entry.alt ? ` "${entry.alt}"` : ''}`;
+
+      } else if (msg.type === 'image') {
+        // Image-only message
+        const content = `${msg.sender}: [IMAGE: ${msg.imageSrc || 'unknown'}]`;
         recentMessages.push({ role: 'user', content });
+
+      } else if (msg.type === 'text+image') {
+        // Combo message: include both text and image reference
+        const role = msg.isClanker ? 'assistant' : 'user';
+        let textContent = msg.content;
+
+        if (msg.isClanker) {
+          textContent = textContent.replace(/^\[clanker\]\s*/i, '');
+        } else {
+          textContent = `${msg.sender}: ${textContent}`;
+        }
+
+        // Add text part
+        recentMessages.push({ role, content: textContent });
+
+        // Add image reference as separate entry
+        if (msg.imageSrc) {
+          const imageContent = `${msg.sender}: [IMAGE: ${msg.imageSrc}]`;
+          recentMessages.push({ role: 'user', content: imageContent });
+        }
       }
     }
 
