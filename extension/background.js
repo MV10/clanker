@@ -25,6 +25,22 @@ const MODES = {
 };
 
 /**
+ * Toolbar icon paths
+ */
+const ICONS = {
+  DEFAULT: {
+    16: 'icons/icon16.png',
+    48: 'icons/icon48.png',
+    128: 'icons/icon128.png'
+  },
+  DISABLED: {
+    16: 'icons/disabled16.png',
+    48: 'icons/disabled48.png',
+    128: 'icons/disabled128.png'
+  }
+};
+
+/**
  * Context menu item IDs
  */
 const MENU_IDS = {
@@ -552,6 +568,7 @@ async function handleSetMode(tabId, mode) {
   const oldMode = tabModes.get(tabId) || MODES.DEACTIVATED;
   tabModes.set(tabId, mode);
   await updateContextMenuForTab(tabId);
+  await updateToolbarIcon(tabId, mode);
 
   // Manage debugger attachment based on mode
   if (mode === MODES.ACTIVE || mode === MODES.AVAILABLE) {
@@ -812,6 +829,24 @@ function createContextMenu() {
 }
 
 /**
+ * Update toolbar icon based on mode for a specific tab
+ * Uses disabled icons for Deactivated/Uninitialized, default icons otherwise
+ */
+async function updateToolbarIcon(tabId, mode) {
+  const isActive = mode === MODES.ACTIVE || mode === MODES.AVAILABLE;
+  const iconSet = isActive ? ICONS.DEFAULT : ICONS.DISABLED;
+
+  try {
+    await chrome.action.setIcon({
+      tabId,
+      path: iconSet
+    });
+  } catch (e) {
+    // Tab might not exist or be accessible
+  }
+}
+
+/**
  * Update context menu checkmarks for a specific tab
  */
 async function updateContextMenuForTab(tabId) {
@@ -888,6 +923,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // noinspection JSDeprecatedSymbols
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   await updateContextMenuForTab(activeInfo.tabId);
+  // Update toolbar icon to reflect this tab's mode
+  const mode = tabModes.get(activeInfo.tabId) || MODES.DEACTIVATED;
+  await updateToolbarIcon(activeInfo.tabId, mode);
 });
 
 /**

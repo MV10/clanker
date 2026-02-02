@@ -6,9 +6,6 @@
 * During long idle periods, scan for recent events of interest and decide whether to comment about it in the chat
 * Notes about interests are restricted by conversation, the same user in a different chat will have separate data
 
-* Read participant list from conversation header instead of deriving from messages; more accurate because some participants may not have sent a message yet.
+* Add Diagnostics menu item "Show Sanitized Conversation State" for public sharing for support requests; change participant names to User001 amd User002 etc, and change phone number participant names to (001) XXX-XXX and (002) XXX-XXXX etc, also redact image blob URI GUIDs with Xs.
 
-* Add Diagnostics menu item "Show Redacted Conversation State" for public sharing for support requests; change participant names to User001 amd User002 etc, and change phone number participant names to (001) XXX-XXX and (002) XXX-XXXX etc, also redact image blob URI GUIDs.
-
-* Change browser toolbar icon to indicate Deactivated mode (apply disabled16/48/128.png)
 
