@@ -30,6 +30,27 @@
   };
 
   /**
+   * Check if extension context is still valid (not invalidated by extension reload)
+   * @returns {boolean}
+   */
+  function isExtensionContextValid() {
+    return typeof chrome !== 'undefined' &&
+           typeof chrome.runtime !== 'undefined' &&
+           typeof chrome.runtime.id !== 'undefined';
+  }
+
+  /**
+   * Handle invalidated extension context - show notification and stop processing
+   */
+  function handleInvalidatedContext() {
+    console.warn('[Clanker] Extension was reloaded. Please refresh this page.');
+    showNotification('Extension was reloaded. Please refresh this page.', 'info');
+    // Prevent further processing
+    state.initialized = false;
+    state.mode = MODES.DEACTIVATED;
+  }
+
+  /**
    * Extension state
    */
   const state = {
@@ -610,6 +631,12 @@
   async function loadConversationMode() {
     if (!state.currentConversationId) return;
 
+    // Check for invalidated context (extension was reloaded)
+    if (!isExtensionContextValid()) {
+      handleInvalidatedContext();
+      return;
+    }
+
     try {
       const key = `mode_${state.currentConversationId}`;
       const result = await Storage.get(key);
@@ -631,7 +658,12 @@
         chrome.runtime.sendMessage({ type: 'DETACH_DEBUGGER' }).catch(() => {});
       }
     } catch (error) {
-      console.warn('[Clanker] Failed to load conversation mode:', error);
+      // Check if this is due to invalidated context
+      if (!isExtensionContextValid()) {
+        handleInvalidatedContext();
+      } else {
+        console.warn('[Clanker] Failed to load conversation mode:', error);
+      }
       state.mode = MODES.DEACTIVATED;
     }
   }
@@ -876,6 +908,7 @@
 
   /**
    * Process newly added DOM nodes for messages
+   * Uses a delay to allow aria-labels to be fully populated by Google Messages
    */
   function processNewNodes(node) {
     // Skip if deactivated or uninitialized
@@ -888,11 +921,19 @@
       return;
     }
 
-    // Find message elements using parser
+    // Find message wrapper elements using parser
     const messageElements = Parser.findMessageElements(node);
 
-    for (const el of messageElements) {
-      processMessage(el);
+    if (messageElements.length > 0) {
+      console.log('[Clanker] Found', messageElements.length, 'message wrapper(s) in new DOM node');
+
+      // Delay processing to allow aria-labels to be fully populated
+      // Google Messages populates these asynchronously
+      setTimeout(() => {
+        for (const el of messageElements) {
+          processMessage(el);
+        }
+      }, 500);
     }
   }
 
@@ -930,14 +971,29 @@
   }
 
   /**
-   * Process a single message element
+   * Process a single message wrapper element
    */
   function processMessage(element) {
     const parsed = Parser.parseMessageElement(element);
-    if (!parsed) return;
+    if (!parsed) {
+      // Get debug info from child parts
+      const textPart = element.querySelector('mws-text-message-part');
+      const imagePart = element.querySelector('mws-image-message-part');
+      console.log('[Clanker] Could not parse message wrapper:', {
+        messageId: element.getAttribute('data-e2e-message-id'),
+        hasTextPart: !!textPart,
+        textAriaLabel: textPart?.getAttribute('aria-label'),
+        hasImagePart: !!imagePart,
+        imageAriaLabel: imagePart?.getAttribute('aria-label')
+      });
+      return;
+    }
 
     // Skip already processed messages
-    if (state.processedMessageIds.has(parsed.id)) return;
+    if (state.processedMessageIds.has(parsed.id)) {
+      console.log('[Clanker] Message already processed:', parsed.id);
+      return;
+    }
     state.processedMessageIds.add(parsed.id);
 
     console.log('[Clanker] New message:', parsed);
@@ -1014,8 +1070,16 @@
    * Generate LLM response and send it
    */
   async function generateAndSendResponse() {
+    console.log('[Clanker] Generating LLM response...');
     const { recentMessages, olderMessageCount } = buildConversationHistory();
     const systemPrompt = buildSystemPrompt(olderMessageCount);
+
+    console.log('[Clanker] Sending to LLM:', {
+      messageCount: recentMessages.length,
+      olderMessageCount,
+      hasSummary: !!state.conversationSummary,
+      hasCustomization: !!state.conversationCustomization
+    });
 
     try {
       let response = await chrome.runtime.sendMessage({
@@ -1026,6 +1090,14 @@
           summary: state.conversationSummary,
           customization: state.conversationCustomization
         }
+      });
+
+      console.log('[Clanker] LLM response received:', {
+        success: response.success,
+        hasContent: !!response.content,
+        hasSummary: !!response.summary,
+        hasRequestImage: !!response.requestImage,
+        error: response.error
       });
 
       // Handle image request from LLM (src URI)

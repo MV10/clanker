@@ -461,94 +461,64 @@ const ClankerParser = {
   },
 
   /**
-   * Find message part elements within a DOM node (for mutation observer)
+   * Find message wrapper elements within a DOM node (for mutation observer)
+   * We watch for wrapper cores instead of individual parts to ensure we get
+   * complete messages with fully-populated aria-labels.
+   * Only returns elements that have a message ID attribute.
    * @param {Element} node
    * @returns {Element[]}
    */
   findMessageElements(node) {
     const elements = [];
 
-    // Check if node itself is a message part
-    if (node.matches) {
-      if (node.matches(ClankerSelectors.MESSAGE_TEXT_PART)) {
-        elements.push(node);
-      }
-      if (node.matches(ClankerSelectors.MESSAGE_IMAGE_PART)) {
+    // Check if node itself is a message wrapper core with a message ID
+    if (node.matches && node.matches(ClankerSelectors.MESSAGE_WRAPPER_CORE)) {
+      if (node.hasAttribute(ClankerSelectors.MESSAGE_ID_ATTR)) {
         elements.push(node);
       }
     }
 
-    // Find message parts within the node
+    // Find message wrapper cores within the node that have message IDs
     if (node.querySelectorAll) {
-      const textParts = node.querySelectorAll(ClankerSelectors.MESSAGE_TEXT_PART);
-      const imageParts = node.querySelectorAll(ClankerSelectors.MESSAGE_IMAGE_PART);
-      elements.push(...textParts, ...imageParts);
+      const wrappers = node.querySelectorAll(ClankerSelectors.MESSAGE_WRAPPER_CORE);
+      for (const wrapper of wrappers) {
+        if (wrapper.hasAttribute(ClankerSelectors.MESSAGE_ID_ATTR)) {
+          elements.push(wrapper);
+        }
+      }
     }
 
     return elements;
   },
 
   /**
-   * Parse a single message element (for mutation observer - new message detection)
-   * @param {Element} element - Either a text or image message part
+   * Parse a single message wrapper element (for mutation observer - new message detection)
+   * Uses the same logic as parseConversation() to find child parts and parse them.
+   * @param {Element} wrapper - A message wrapper core element
    * @returns {ParsedMessage|null}
    */
-  parseMessageElement(element) {
+  parseMessageElement(wrapper) {
     // Skip tombstone messages
-    if (this.isTombstone(element)) {
+    if (this.isTombstone(wrapper)) {
       return null;
     }
 
-    const messageId = this.getMessageId(element);
-    const ariaLabel = element.getAttribute('aria-label');
-    if (!ariaLabel) return null;
-
-    // Try text message pattern
-    let match = ariaLabel.match(ClankerPatterns.TEXT_MESSAGE);
-    if (match) {
-      const sender = match[1].trim();
-      const content = match[2].trim();
-      const direction = match[3].toLowerCase();
-      const timestamp = match[4].trim();
-
-      return {
-        id: messageId,
-        sender,
-        content,
-        type: 'text',
-        imageSrc: null,
-        isLocalUser: sender === 'You',
-        isOutgoing: direction === 'sent',
-        isClanker: sender === 'You' && content.startsWith('[clanker]'),
-        timestamp,
-        reactions: [],
-        element,
-      };
+    const messageId = wrapper.getAttribute(ClankerSelectors.MESSAGE_ID_ATTR);
+    if (!messageId) {
+      return null;
     }
 
-    // Try image message pattern
-    match = ariaLabel.match(ClankerPatterns.IMAGE_MESSAGE);
-    if (match) {
-      const sender = match[1].trim();
-      const direction = match[2].toLowerCase();
-      const timestamp = match[3].trim();
+    // Find child parts
+    const textPart = wrapper.querySelector(ClankerSelectors.MESSAGE_TEXT_PART);
+    const imagePart = wrapper.querySelector(ClankerSelectors.MESSAGE_IMAGE_PART);
 
-      const img = element.querySelector('img');
-      const imageSrc = img ? img.src : null;
-
-      return {
-        id: messageId,
-        sender,
-        content: '[IMAGE]',
-        type: 'image',
-        imageSrc,
-        isLocalUser: sender === 'You',
-        isOutgoing: direction === 'sent',
-        isClanker: false,
-        timestamp,
-        reactions: [],
-        element,
-      };
+    // Parse based on what parts exist (same logic as parseConversation)
+    if (textPart && imagePart) {
+      return this.parseTextImageMessage(messageId, textPart, imagePart);
+    } else if (textPart) {
+      return this.parseTextMessage(messageId, textPart);
+    } else if (imagePart) {
+      return this.parseImageMessage(messageId, imagePart);
     }
 
     return null;

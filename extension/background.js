@@ -171,12 +171,21 @@ function isValidEndpoint(url) {
  * Send conversation to LLM and get response
  */
 async function handleLLMRequest({ messages, systemPrompt, summary, customization, imageData }) {
+  console.log('[Clanker] handleLLMRequest called:', {
+    messageCount: messages?.length,
+    hasSystemPrompt: !!systemPrompt,
+    hasSummary: !!summary,
+    hasCustomization: !!customization,
+    hasImageData: !!imageData
+  });
+
   try {
     const config = await Storage.get(Object.values(STORAGE_KEYS));
 
     if (!config[STORAGE_KEYS.API_ENDPOINT] ||
         !config[STORAGE_KEYS.API_KEY] ||
         !config[STORAGE_KEYS.MODEL]) {
+      console.log('[Clanker] Extension not configured');
       return { success: false, error: 'Extension not configured' };
     }
 
@@ -232,6 +241,10 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
     // Add recent literal messages (images are inline as [IMAGE: blob:...] format)
     apiMessages.push(...messages);
 
+    console.log('[Clanker] Sending API request to:', config[STORAGE_KEYS.API_ENDPOINT]);
+    console.log('[Clanker] Using model:', config[STORAGE_KEYS.MODEL]);
+    console.log('[Clanker] Total messages in request:', apiMessages.length);
+
     const response = await fetch(
       `${config[STORAGE_KEYS.API_ENDPOINT]}/chat/completions`,
       {
@@ -249,8 +262,11 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
       }
     );
 
+    console.log('[Clanker] API response status:', response.status);
+
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
+      console.error('[Clanker] API error:', errorData);
       return {
         success: false,
         error: errorData.error?.message || `HTTP ${response.status}`
@@ -259,6 +275,7 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
 
     const data = await response.json();
     const rawContent = data.choices?.[0]?.message?.content;
+    console.log('[Clanker] Raw LLM response:', rawContent);
 
     if (!rawContent) {
       return { success: false, error: 'No response from LLM' };
@@ -266,6 +283,7 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
 
     // Parse JSON response from LLM
     const parsed = parseLLMResponse(rawContent);
+    console.log('[Clanker] Parsed response:', parsed);
     return {
       success: true,
       content: parsed.response,
