@@ -1,8 +1,8 @@
-# clanker
+# clanker <img src="https://github.com/MV10/clanker/blob/master/extension/icons/icon48.png"/>
 
-Clanker is an _**experimental**_ Chromium browser extension which allows an OpenAI-compliant LLM such as Grok, ChatGPT or even locally-hosted AIs to participate in your Google Messages SMS conversations.
+Clanker is an _**experimental**_ Chromium browser extension which allows an OpenAI-compliant LLM such as Grok, ChatGPT or even locally-hosted AIs to participate in your Google Messages browser SMS conversations.
 
-You will require an API key but costs should be very low. Analysis of a real, active, 3 hour conversation between two people estimated participation by the Grok _grok-4-1-fast-non-reasoning_ model would incur around one cent of processing time using January 2026 pricing, and assuming no image processing.
+You will require an API key but costs should be very low. A real, active, 3 hour conversation between two people with participation by the Grok _grok-4-1-fast-non-reasoning_ model consumed about 1.5 cents of processing time (using January 2026 pricing, and minimal image processing).
 
 ## Installing & Updating
 
@@ -18,7 +18,7 @@ To update, either pull the latest changes to your clone, or delete and re-clone.
 
 ## Configuration & Usage
 
-Navigate to https://messages.google.com and select a conversation, then right-click in the browser window. You will see a `Clanker` sub-menu where you can modify the settings like your API endpoint and key, and your user name (which is used the AI wishes to address you specifically; your name is not visible in the chat data, unlike other participants).
+Navigate to https://messages.google.com and select a conversation, then right-click in the browser window. You will see a `Clanker` sub-menu where you can modify the settings like your API endpoint and key, and your user name (your name is not visible in the chat data, unlike other participants, so the AI needs to know who you are). Phone-number-only participants are supported too.
 
 Once it is configured, the context menu options become available:
 
