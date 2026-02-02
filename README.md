@@ -22,11 +22,11 @@ Navigate to https://messages.google.com and select a conversation, then right-cl
 
 Once it is configured, the context menu options become available:
 
-* Disabled - the conversation is not parsed or sent anywhere
+* Deactivated - the conversation is not parsed or sent anywhere
 * Available - the conversation is parsed locally, the AI replies only if addressed by name 
 * Active - the conversation is sent to the AI for processing for every response
 
-New conversations are always in Disabled mode. It will remember which mode a conversation was in and restore it when the conversation is re-selected.
+New conversations are always in Deactivated mode. It will remember which mode a conversation was in and restore it when the conversation is re-selected.
 
 The LLM can request a copy of images that are in the recent chat history. Video or other attachment types are filtered out.
 
