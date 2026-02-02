@@ -18,7 +18,17 @@
   "content_scripts": [
     {
       "matches": ["https://messages.google.com/*"],
-      "js": ["storage.js", "parser.js", "content.js"],
+      "js": [
+        "storage.js",
+        "parser.js",
+        "content-state.js",
+        "content-storage.js",
+        "content-images.js",
+        "content-observers.js",
+        "content-messages.js",
+        "content-llm.js",
+        "content-main.js"
+      ],
       "css": ["content.css"]
     }
   ],
