@@ -1197,6 +1197,8 @@
 
     for (let i = recentStart; i < allMessages.length; i++) {
       const msg = allMessages[i];
+      // Replace "You" with configured user name for sender attribution
+      const senderName = msg.sender === 'You' ? getLocalUserName() : msg.sender;
 
       if (msg.type === 'text') {
         // Text-only message
@@ -1206,14 +1208,14 @@
         if (msg.isClanker) {
           content = content.replace(/^\[clanker\]\s*/i, '');
         } else {
-          content = `${msg.sender}: ${content}`;
+          content = `${senderName}: ${content}`;
         }
 
         recentMessages.push({ role, content });
 
       } else if (msg.type === 'image') {
         // Image-only message
-        const content = `${msg.sender}: [IMAGE: ${msg.imageSrc || 'unknown'}]`;
+        const content = `${senderName}: [IMAGE: ${msg.imageSrc || 'unknown'}]`;
         recentMessages.push({ role: 'user', content });
 
       } else if (msg.type === 'text+image') {
@@ -1224,7 +1226,7 @@
         if (msg.isClanker) {
           textContent = textContent.replace(/^\[clanker\]\s*/i, '');
         } else {
-          textContent = `${msg.sender}: ${textContent}`;
+          textContent = `${senderName}: ${textContent}`;
         }
 
         // Add text part
@@ -1232,7 +1234,7 @@
 
         // Add image reference as separate entry
         if (msg.imageSrc) {
-          const imageContent = `${msg.sender}: [IMAGE: ${msg.imageSrc}]`;
+          const imageContent = `${senderName}: [IMAGE: ${msg.imageSrc}]`;
           recentMessages.push({ role: 'user', content: imageContent });
         }
       }
@@ -1242,18 +1244,43 @@
   }
 
   /**
+   * Get the display name for the local user
+   * Uses configured userName, falls back to "You" if not set
+   */
+  function getLocalUserName() {
+    return state.config?.userName || 'You';
+  }
+
+  /**
+   * Replace "You" with the configured user name in a string
+   */
+  function replaceYouWithUserName(text) {
+    const userName = getLocalUserName();
+    if (userName === 'You') return text;
+    return text.replace(/\bYou\b/g, userName);
+  }
+
+  /**
    * Build system prompt for LLM
    */
   function buildSystemPrompt(olderMessageCount) {
-    const participants = state.conversation
-      ? Array.from(state.conversation.participants).join(', ')
-      : 'unknown';
+    const rawParticipants = state.conversation
+      ? Array.from(state.conversation.participants)
+      : [];
+
+    // Replace "You" with configured user name
+    const participants = rawParticipants
+      .map(p => p === 'You' ? getLocalUserName() : p)
+      .join(', ') || 'unknown';
+
+    const localUserName = getLocalUserName();
 
     const parts = [
       'You are Clanker (or Clank), an AI assistant participating in an SMS group chat via browser extension.',
       'Keep your responses brief and casual, matching the SMS chat style.',
       'Do not dominate the conversation. Only respond when appropriate.',
       `Current participants: ${participants}.`,
+      `The local user (running this extension) is ${localUserName}. Messages from ${localUserName} are sent from this device.`,
       '',
       'RESPONSE FORMAT: You must respond with valid JSON containing:',
       '- "response": Your chat message, or null if you choose not to respond. Do NOT include the [clanker] prefix.',
