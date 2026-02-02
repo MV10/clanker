@@ -33,7 +33,12 @@ const MENU_IDS = {
   MODE_ACTIVE: 'clanker-mode-active',
   MODE_AVAILABLE: 'clanker-mode-available',
   SEPARATOR: 'clanker-separator',
-  SETTINGS: 'clanker-settings'
+  SETTINGS: 'clanker-settings',
+  SEPARATOR2: 'clanker-separator2',
+  DIAGNOSTICS: 'clanker-diagnostics',
+  DIAG_LOG: 'clanker-diag-log',
+  DIAG_RESET_CONVERSATION: 'clanker-diag-reset-conversation',
+  DIAG_RESET_ALL: 'clanker-diag-reset-all'
 };
 
 /**
@@ -569,6 +574,131 @@ async function handleSetMode(tabId, mode) {
 }
 
 /**
+ * Handle diagnostic: Log conversation state to a new tab
+ */
+async function handleDiagLog(tabId) {
+  try {
+    // Request state from content script
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_DIAGNOSTIC_STATE' });
+
+    if (!response?.success) {
+      console.error('[Clanker] Failed to get diagnostic state:', response?.error);
+      return;
+    }
+
+    // Create HTML content for the diagnostic output
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Clanker Diagnostic - Conversation State</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+    h1 { color: #569cd6; }
+    h2 { color: #4ec9b0; margin-top: 30px; }
+    pre { background: #2d2d2d; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
+    .section { margin-bottom: 20px; }
+    .label { color: #9cdcfe; }
+    .value { color: #ce9178; }
+    .null { color: #808080; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Clanker Diagnostic - Conversation State</h1>
+  <p>Generated: ${new Date().toISOString()}</p>
+
+  <h2>Runtime State</h2>
+  <pre>${escapeHtml(JSON.stringify(response.runtimeState, null, 2))}</pre>
+
+  <h2>Stored Mode</h2>
+  <pre>${escapeHtml(JSON.stringify(response.storedMode, null, 2))}</pre>
+
+  <h2>Stored Summary</h2>
+  <pre>${response.storedSummary ? escapeHtml(response.storedSummary) : '<span class="null">null</span>'}</pre>
+
+  <h2>Stored Customization</h2>
+  <pre>${response.storedCustomization ? escapeHtml(response.storedCustomization) : '<span class="null">null</span>'}</pre>
+
+  <h2>Recent Messages (last 20)</h2>
+  <pre>${escapeHtml(JSON.stringify(response.recentMessages, null, 2))}</pre>
+</body>
+</html>`;
+
+    // Open in a new tab using data URL
+    const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+    chrome.tabs.create({ url: dataUrl });
+
+  } catch (error) {
+    console.error('[Clanker] Diagnostic log error:', error);
+  }
+}
+
+/**
+ * Escape HTML for safe display
+ */
+function escapeHtml(text) {
+  if (typeof text !== 'string') return String(text);
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Handle diagnostic: Reset current conversation state
+ */
+async function handleDiagResetConversation(tabId) {
+  try {
+    // Tell content script to reset conversation state
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'DIAG_RESET_CONVERSATION' });
+
+    if (!response?.success) {
+      console.error('[Clanker] Failed to reset conversation:', response?.error);
+    }
+
+    // Also set mode to deactivated in background
+    await handleSetMode(tabId, MODES.DEACTIVATED);
+
+  } catch (error) {
+    console.error('[Clanker] Reset conversation error:', error);
+  }
+}
+
+/**
+ * Handle diagnostic: Reset all state data
+ */
+async function handleDiagResetAll(tabId) {
+  try {
+    // Inject a confirmation dialog
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        return confirm('Reset ALL Clanker state data?\n\nThis will delete all stored data for all conversations including modes, summaries, and customizations.\n\nThis action cannot be undone.');
+      }
+    });
+
+    if (!result?.result) {
+      return; // User cancelled
+    }
+
+    // Clear all IndexedDB storage
+    await Storage.clear();
+
+    // Tell content script to reinitialize
+    await chrome.tabs.sendMessage(tabId, { type: 'DIAG_REINITIALIZE' });
+
+    // Set mode to deactivated
+    await handleSetMode(tabId, MODES.DEACTIVATED);
+
+    console.log('[Clanker] All state data reset');
+
+  } catch (error) {
+    console.error('[Clanker] Reset all error:', error);
+  }
+}
+
+/**
  * Create the context menu structure
  */
 function createContextMenu() {
@@ -632,6 +762,51 @@ function createContextMenu() {
       contexts: ['page'],
       documentUrlPatterns: ['https://messages.google.com/*']
     });
+
+    // Separator before diagnostics
+    chrome.contextMenus.create({
+      id: MENU_IDS.SEPARATOR2,
+      parentId: MENU_IDS.PARENT,
+      type: 'separator',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://messages.google.com/*']
+    });
+
+    // Diagnostics submenu
+    chrome.contextMenus.create({
+      id: MENU_IDS.DIAGNOSTICS,
+      parentId: MENU_IDS.PARENT,
+      title: 'Diagnostics',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://messages.google.com/*']
+    });
+
+    // Diagnostic: Show conversation state
+    chrome.contextMenus.create({
+      id: MENU_IDS.DIAG_LOG,
+      parentId: MENU_IDS.DIAGNOSTICS,
+      title: 'Show Conversation State',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://messages.google.com/*']
+    });
+
+    // Diagnostic: Reset conversation state
+    chrome.contextMenus.create({
+      id: MENU_IDS.DIAG_RESET_CONVERSATION,
+      parentId: MENU_IDS.DIAGNOSTICS,
+      title: 'Reset Conversation State',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://messages.google.com/*']
+    });
+
+    // Diagnostic: Reset all state data
+    chrome.contextMenus.create({
+      id: MENU_IDS.DIAG_RESET_ALL,
+      parentId: MENU_IDS.DIAGNOSTICS,
+      title: 'Reset All State Data...',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://messages.google.com/*']
+    });
   });
 }
 
@@ -686,6 +861,21 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     case MENU_IDS.SETTINGS:
       // Open the options page in a new tab
       chrome.runtime.openOptionsPage();
+      break;
+
+    case MENU_IDS.DIAG_LOG:
+      // Show conversation state in a new tab
+      handleDiagLog(tab.id);
+      break;
+
+    case MENU_IDS.DIAG_RESET_CONVERSATION:
+      // Reset current conversation state
+      handleDiagResetConversation(tab.id);
+      break;
+
+    case MENU_IDS.DIAG_RESET_ALL:
+      // Reset all state data (with confirmation)
+      handleDiagResetAll(tab.id);
       break;
   }
 });

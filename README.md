@@ -30,10 +30,12 @@ Once it is configured, the context menu options become available:
 
 New conversations are always in Disabled mode. It will remember which mode a conversation was in and restore it when the conversation is re-selected.
 
-## Issues
-
-If you see a problem, please open a new [Issue](https://github.com/MV10/clanker/issues) (this requires a Github account).
+## Comments, Troubleshooting, etc.
 
 You should follow the pinned [Update Notifications](https://github.com/MV10/clanker/issues/1) issue to be notified when the extension is updated. Google releases new versions of Messages frequently and it's possible the extension will need to match changes in the conversation data structures. 
 
 Because Google uses the hideous abomination known as Angular, interaction with the page is difficult (specifically, clicking that "Send" button). When an AI is active the extension has to put the page into debug mode to simulate user keyboard input. Debug mode shows an ugly banner at the top of your window. Do not dismiss the banner, that will disable the interaction (it detaches the debugger).
+
+Google Messages should only be active in a single tab (only one instance should connect to your phone on each computer, by design), but there may be some odd behaviors in the edge case if you have other copies open on other tabs or browser windows.
+
+If you see a problem, need help, or just have questions, please open a new [Issue](https://github.com/MV10/clanker/issues) (this requires a Github account).

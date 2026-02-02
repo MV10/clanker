@@ -269,6 +269,7 @@
     setupInputObserver();
     setupConversationObserver();
     setupMessageListener();
+    setupVisibilityListener();
 
     // If no conversation is active, wait for one to be selected
     if (!verification.hasActiveConversation) {
@@ -299,11 +300,162 @@
     // addListener is still valid for extensions, it is deprecated for DOM scripts
     // noinspection JSDeprecatedSymbols
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.type === 'MODE_CHANGED') {
-        handleModeChange(message.mode);
-        sendResponse({ success: true });
+      switch (message.type) {
+        case 'MODE_CHANGED':
+          handleModeChange(message.mode);
+          sendResponse({ success: true });
+          break;
+
+        case 'GET_DIAGNOSTIC_STATE':
+          handleGetDiagnosticState().then(sendResponse);
+          return true; // Keep channel open for async response
+
+        case 'DIAG_RESET_CONVERSATION':
+          handleDiagResetConversation().then(sendResponse);
+          return true;
+
+        case 'DIAG_REINITIALIZE':
+          handleDiagReinitialize().then(sendResponse);
+          return true;
+
+        default:
+          sendResponse({ success: false, error: 'Unknown message type' });
       }
       return false;
+    });
+  }
+
+  /**
+   * Handle diagnostic: Get current state for logging
+   */
+  async function handleGetDiagnosticState() {
+    try {
+      // Get stored data for this conversation
+      const modeKey = `mode_${state.currentConversationId}`;
+      const summaryKey = `summary_${state.currentConversationId}`;
+      const customizationKey = `customization_${state.currentConversationId}`;
+
+      const stored = await Storage.get([modeKey, summaryKey, customizationKey]);
+
+      // Get recent messages from parser
+      const context = Parser.parseConversation();
+      const recentMessages = context.messages.slice(-20).map(m => ({
+        id: m.id,
+        sender: m.sender,
+        content: m.content,
+        isClanker: m.isClanker,
+        timestamp: m.timestamp
+      }));
+
+      return {
+        success: true,
+        runtimeState: {
+          mode: state.mode,
+          conversationId: state.currentConversationId,
+          initialized: state.initialized,
+          processedMessageCount: state.processedMessageIds.size,
+          pendingResponse: state.pendingResponseMessageId !== null,
+          userTyping: state.userTyping
+        },
+        storedMode: stored[modeKey] || null,
+        storedSummary: stored[summaryKey] || null,
+        storedCustomization: stored[customizationKey] || null,
+        recentMessages
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Handle diagnostic: Reset current conversation state
+   */
+  async function handleDiagResetConversation() {
+    try {
+      if (!state.currentConversationId) {
+        return { success: false, error: 'No conversation active' };
+      }
+
+      // Delete stored data for this conversation
+      const modeKey = `mode_${state.currentConversationId}`;
+      const summaryKey = `summary_${state.currentConversationId}`;
+      const customizationKey = `customization_${state.currentConversationId}`;
+      const imageCacheKey = `image_cache_${state.currentConversationId}`;
+
+      await Storage.remove(modeKey);
+      await Storage.remove(summaryKey);
+      await Storage.remove(customizationKey);
+      await Storage.remove(imageCacheKey);
+
+      // Reset runtime state
+      state.mode = MODES.DEACTIVATED;
+      state.conversationSummary = null;
+      state.conversationCustomization = null;
+      state.processedMessageIds.clear();
+      cancelPendingResponse();
+
+      // Re-parse the conversation
+      parseExistingConversation();
+
+      console.log('[Clanker] Conversation state reset');
+      showNotification('Conversation state reset', 'success');
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Handle diagnostic: Reinitialize after full reset
+   */
+  async function handleDiagReinitialize() {
+    try {
+      // Reset all runtime state
+      state.initialized = false;
+      state.initializing = false;
+      state.mode = MODES.DEACTIVATED;
+      state.conversation = null;
+      state.conversationSummary = null;
+      state.conversationCustomization = null;
+      state.processedMessageIds.clear();
+      state.currentConversationId = null;
+      cancelPendingResponse();
+
+      // Re-detect conversation and parse
+      const conversationId = Parser.detectConversationId();
+      if (conversationId && conversationId !== 'unknown') {
+        state.currentConversationId = conversationId;
+        parseExistingConversation();
+      }
+
+      state.initialized = true;
+
+      console.log('[Clanker] Reinitialized after full reset');
+      showNotification('All state data reset', 'success');
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Set up listener for tab visibility changes
+   * Reloads conversation state when tab becomes visible (handles multi-tab sync)
+   */
+  function setupVisibilityListener() {
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible' && state.currentConversationId) {
+        console.log('[Clanker] Tab became visible, reloading conversation state');
+        try {
+          await loadConversationMode();
+          await loadConversationSummary();
+          await loadConversationCustomization();
+        } catch (e) {
+          console.warn('[Clanker] Failed to reload conversation state:', e);
+        }
+      }
     });
   }
 
@@ -321,6 +473,9 @@
 
     state.mode = newMode;
     console.log(`[Clanker] Mode changed: ${oldMode} -> ${newMode}`);
+
+    // Save mode for this conversation
+    saveConversationMode(newMode);
 
     // Cancel any pending response when deactivating
     if (newMode === MODES.DEACTIVATED) {
@@ -412,21 +567,13 @@
       state.conversationCustomization = null;
       state.processedMessageIds.clear();
       cancelPendingResponse();
-
-      // Reset mode to deactivated for new conversations
-      state.mode = MODES.DEACTIVATED;
-      try {
-        await chrome.runtime.sendMessage({ type: 'SET_MODE', mode: MODES.DEACTIVATED });
-      } catch (e) {
-        // Extension context may have been invalidated (e.g., extension reloaded)
-        console.warn('[Clanker] Could not notify background of mode change');
-      }
     }
 
     state.currentConversationId = newConversationId;
 
-    // Load any existing summary and customization for this conversation
+    // Load stored mode, summary, and customization for this conversation
     try {
+      await loadConversationMode();
       await loadConversationSummary();
       await loadConversationCustomization();
     } catch (e) {
@@ -467,6 +614,53 @@
       console.log('[Clanker] Saved conversation summary');
     } catch (error) {
       console.warn('[Clanker] Failed to save conversation summary:', error);
+    }
+  }
+
+  /**
+   * Load conversation mode from storage
+   */
+  async function loadConversationMode() {
+    if (!state.currentConversationId) return;
+
+    try {
+      const key = `mode_${state.currentConversationId}`;
+      const result = await Storage.get(key);
+      const storedMode = result[key];
+
+      if (storedMode && Object.values(MODES).includes(storedMode)) {
+        state.mode = storedMode;
+        await chrome.runtime.sendMessage({ type: 'SET_MODE', mode: storedMode });
+        console.log('[Clanker] Restored conversation mode:', storedMode);
+
+        // If restoring to deactivated, ensure debugger is detached
+        if (storedMode === MODES.DEACTIVATED) {
+          chrome.runtime.sendMessage({ type: 'DETACH_DEBUGGER' }).catch(() => {});
+        }
+      } else {
+        // Default to deactivated for conversations without stored mode
+        state.mode = MODES.DEACTIVATED;
+        await chrome.runtime.sendMessage({ type: 'SET_MODE', mode: MODES.DEACTIVATED });
+        chrome.runtime.sendMessage({ type: 'DETACH_DEBUGGER' }).catch(() => {});
+      }
+    } catch (error) {
+      console.warn('[Clanker] Failed to load conversation mode:', error);
+      state.mode = MODES.DEACTIVATED;
+    }
+  }
+
+  /**
+   * Save conversation mode to storage
+   */
+  async function saveConversationMode(mode) {
+    if (!state.currentConversationId) return;
+
+    try {
+      const key = `mode_${state.currentConversationId}`;
+      await Storage.set({ [key]: mode });
+      console.log('[Clanker] Saved conversation mode:', mode);
+    } catch (error) {
+      console.warn('[Clanker] Failed to save conversation mode:', error);
     }
   }
 
