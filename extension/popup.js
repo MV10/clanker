@@ -10,7 +10,8 @@ const STORAGE_KEYS = {
   API_ENDPOINT: 'apiEndpoint',
   API_KEY: 'apiKey',
   MODEL: 'model',
-  USER_NAME: 'userName'
+  USER_NAME: 'userName',
+  HISTORY_SIZE: 'historySize'
 };
 
 /**
@@ -22,6 +23,7 @@ const elements = {
   apiKey: document.getElementById('api-key'),
   model: document.getElementById('model'),
   userName: document.getElementById('user-name'),
+  historySize: document.getElementById('history-size'),
   saveBtn: document.getElementById('save-btn'),
   testBtn: document.getElementById('test-btn'),
   statusBanner: document.getElementById('status-banner'),
@@ -46,6 +48,9 @@ async function loadSettings() {
     }
     if (result[STORAGE_KEYS.USER_NAME]) {
       elements.userName.value = result[STORAGE_KEYS.USER_NAME];
+    }
+    if (result[STORAGE_KEYS.HISTORY_SIZE]) {
+      elements.historySize.value = result[STORAGE_KEYS.HISTORY_SIZE];
     }
 
     updateConnectionStatus();
@@ -107,6 +112,7 @@ async function saveSettings(event) {
   const apiKey = elements.apiKey.value.trim();
   const model = elements.model.value.trim();
   const userName = elements.userName.value.trim();
+  const historySize = parseInt(elements.historySize.value, 10) || 20;
 
   // Validate endpoint URL
   const validation = validateEndpoint(endpoint);
@@ -119,11 +125,15 @@ async function saveSettings(event) {
     console.warn('Endpoint warning:', validation.warning);
   }
 
+  // Clamp history size to valid range
+  const clampedHistorySize = Math.max(10, Math.min(500, historySize));
+
   const settings = {
     [STORAGE_KEYS.API_ENDPOINT]: endpoint,
     [STORAGE_KEYS.API_KEY]: apiKey,
     [STORAGE_KEYS.MODEL]: model,
-    [STORAGE_KEYS.USER_NAME]: userName
+    [STORAGE_KEYS.USER_NAME]: userName,
+    [STORAGE_KEYS.HISTORY_SIZE]: clampedHistorySize
   };
 
   try {

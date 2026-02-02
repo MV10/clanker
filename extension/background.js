@@ -11,7 +11,8 @@ const STORAGE_KEYS = {
   API_ENDPOINT: 'apiEndpoint',
   API_KEY: 'apiKey',
   MODEL: 'model',
-  USER_NAME: 'userName'
+  USER_NAME: 'userName',
+  HISTORY_SIZE: 'historySize'
 };
 
 /**
@@ -487,7 +488,8 @@ async function handleGetConfig() {
         hasApiConfig: !!(config[STORAGE_KEYS.API_ENDPOINT] &&
                         config[STORAGE_KEYS.API_KEY] &&
                         config[STORAGE_KEYS.MODEL]),
-        userName: config[STORAGE_KEYS.USER_NAME] || null
+        userName: config[STORAGE_KEYS.USER_NAME] || null,
+        historySize: config[STORAGE_KEYS.HISTORY_SIZE] || 20
       }
     };
   } catch (error) {

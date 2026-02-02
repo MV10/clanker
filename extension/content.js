@@ -69,13 +69,18 @@
     config: null,
     // Concurrency control for LLM requests
     llmRequestId: 0,        // Incremented each time a response is triggered
-    llmInFlight: false      // True while an LLM request is active
+    llmInFlight: false,     // True while an LLM request is active
+    // Conversation change guard
+    conversationChanging: false,  // True while switching conversations
+    // Last processed message tracking (for detecting new messages on return)
+    lastProcessedMessageId: null
   };
 
   /**
-   * Number of recent messages to send literally (not summarized)
+   * Default number of recent messages to send literally (not summarized)
+   * Can be overridden by config.historySize
    */
-  const RECENT_MESSAGE_COUNT = 10;
+  const DEFAULT_HISTORY_SIZE = 20;
 
   /**
    * Image processing configuration
@@ -286,11 +291,13 @@
       // The conversation observer will detect when a conversation becomes active
     } else {
       // Detect current conversation and parse it
+      state.conversationChanging = true;  // Block message processing until parsed
       const conversationId = Parser.detectConversationId();
       await handleConversationChange(conversationId);
       // Wait for messages to fully load before parsing
       setTimeout(() => {
         parseExistingConversation();
+        state.conversationChanging = false;  // Re-enable message processing
       }, 500);
     }
 
@@ -343,8 +350,9 @@
       const modeKey = `mode_${state.currentConversationId}`;
       const summaryKey = `summary_${state.currentConversationId}`;
       const customizationKey = `customization_${state.currentConversationId}`;
+      const lastMessageIdKey = `lastMessageId_${state.currentConversationId}`;
 
-      const stored = await Storage.get([modeKey, summaryKey, customizationKey]);
+      const stored = await Storage.get([modeKey, summaryKey, customizationKey, lastMessageIdKey]);
 
       // Get recent messages from parser (images are now included in messages array)
       const context = Parser.parseConversation();
@@ -366,11 +374,13 @@
           initialized: state.initialized,
           processedMessageCount: state.processedMessageIds.size,
           pendingResponse: state.pendingResponseMessageId !== null,
-          userTyping: state.userTyping
+          userTyping: state.userTyping,
+          lastProcessedMessageId: state.lastProcessedMessageId
         },
         storedMode: stored[modeKey] || null,
         storedSummary: stored[summaryKey] || null,
         storedCustomization: stored[customizationKey] || null,
+        storedLastMessageId: stored[lastMessageIdKey] || null,
         recentMessages
       };
     } catch (error) {
@@ -392,16 +402,19 @@
       const summaryKey = `summary_${state.currentConversationId}`;
       const customizationKey = `customization_${state.currentConversationId}`;
       const imageCacheKey = `image_cache_${state.currentConversationId}`;
+      const lastMessageIdKey = `lastMessageId_${state.currentConversationId}`;
 
       await Storage.remove(modeKey);
       await Storage.remove(summaryKey);
       await Storage.remove(customizationKey);
       await Storage.remove(imageCacheKey);
+      await Storage.remove(lastMessageIdKey);
 
       // Reset runtime state
       state.mode = MODES.DEACTIVATED;
       state.conversationSummary = null;
       state.conversationCustomization = null;
+      state.lastProcessedMessageId = null;
       state.processedMessageIds.clear();
       cancelPendingResponse();
 
@@ -429,6 +442,7 @@
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
+      state.lastProcessedMessageId = null;
       state.processedMessageIds.clear();
       state.currentConversationId = null;
       state.llmInFlight = false;
@@ -596,17 +610,19 @@
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
+      state.lastProcessedMessageId = null;
       state.processedMessageIds.clear();
       cancelPendingResponse();
     }
 
     state.currentConversationId = newConversationId;
 
-    // Load stored mode, summary, and customization for this conversation
+    // Load stored mode, summary, customization, and last message ID for this conversation
     try {
       await loadConversationMode();
       await loadConversationSummary();
       await loadConversationCustomization();
+      await loadLastProcessedMessageId();
     } catch (e) {
       // Storage may fail if extension context invalidated
       console.warn('[Clanker] Could not load conversation data');
@@ -749,6 +765,46 @@
   }
 
   /**
+   * Load last processed message ID from storage
+   */
+  async function loadLastProcessedMessageId() {
+    if (!state.currentConversationId) return;
+
+    try {
+      const key = `lastMessageId_${state.currentConversationId}`;
+      const result = await Storage.get(key);
+      state.lastProcessedMessageId = result[key] || null;
+
+      if (state.lastProcessedMessageId) {
+        console.log('[Clanker] Loaded last processed message ID:', state.lastProcessedMessageId);
+      }
+    } catch (error) {
+      console.warn('[Clanker] Failed to load last message ID:', error);
+    }
+  }
+
+  /**
+   * Save last processed message ID to storage
+   * Only saves permanent IDs (not temporary ones that start with "tmp_")
+   */
+  async function saveLastProcessedMessageId(messageId) {
+    if (!state.currentConversationId || !messageId) return;
+
+    // Don't save temporary IDs - they get replaced with permanent IDs later
+    if (messageId.startsWith('tmp_')) {
+      return;
+    }
+
+    try {
+      const key = `lastMessageId_${state.currentConversationId}`;
+      await Storage.set({ [key]: messageId });
+      state.lastProcessedMessageId = messageId;
+    } catch (error) {
+      console.warn('[Clanker] Failed to save last message ID:', error);
+    }
+  }
+
+  /**
    * Set up observer to detect conversation switches
    */
   function setupConversationObserver() {
@@ -774,14 +830,17 @@
         const newConversationId = Parser.detectConversationId();
         if (newConversationId !== state.currentConversationId) {
           isProcessingChange = true;
+          state.conversationChanging = true;  // Block message processing
           try {
             await handleConversationChange(newConversationId);
             // Wait a bit more for messages to load, then parse
             setTimeout(() => {
               parseExistingConversation();
+              state.conversationChanging = false;  // Re-enable message processing
               isProcessingChange = false;
             }, 300);
           } catch (e) {
+            state.conversationChanging = false;
             isProcessingChange = false;
             console.warn('[Clanker] Error during conversation change:', e);
           }
@@ -964,8 +1023,8 @@
    * Uses a delay to allow aria-labels to be fully populated by Google Messages
    */
   function processNewNodes(node) {
-    // Skip if deactivated or uninitialized
-    if (state.mode === MODES.DEACTIVATED || state.mode === MODES.UNINITIALIZED) {
+    // Skip if deactivated, uninitialized, or conversation is changing
+    if (state.mode === MODES.DEACTIVATED || state.mode === MODES.UNINITIALIZED || state.conversationChanging) {
       return;
     }
 
@@ -1017,9 +1076,83 @@
       console.log('[Clanker] Participants:', Array.from(state.conversation.participants));
     }
 
+    const messages = state.conversation.messages;
+    const currentLastId = messages.length > 0 ? messages[messages.length - 1].id : null;
+
+    // Check for new messages since we last viewed this conversation
+    if (state.lastProcessedMessageId && currentLastId !== state.lastProcessedMessageId) {
+      // Find messages that arrived after our last processed message
+      const lastIndex = messages.findIndex(m => m.id === state.lastProcessedMessageId);
+
+      if (lastIndex >= 0) {
+        // Found the last processed message, check for new ones after it
+        const newMessages = messages.slice(lastIndex + 1);
+
+        if (newMessages.length > 0) {
+          console.log(`[Clanker] Found ${newMessages.length} new message(s) since last visit`);
+
+          // Process new messages based on mode
+          if (state.mode === MODES.ACTIVE || state.mode === MODES.AVAILABLE) {
+            processNewMessagesOnReturn(newMessages);
+          }
+        }
+      } else {
+        // Last processed ID not found (maybe was a temp ID) - don't treat all as new
+        console.log('[Clanker] Last processed message ID not found in current messages, skipping new message check');
+      }
+    }
+
     // Mark all existing messages as processed
-    for (const msg of state.conversation.messages) {
+    for (const msg of messages) {
       state.processedMessageIds.add(msg.id);
+    }
+
+    // Update last processed message ID - find the last permanent (non-temp) ID
+    // Iterate backwards to find the most recent permanent ID
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msgId = messages[i].id;
+      if (!msgId.startsWith('tmp_')) {
+        saveLastProcessedMessageId(msgId);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Process messages that arrived while viewing another conversation
+   * @param {ParsedMessage[]} newMessages - Messages that arrived since last visit
+   */
+  function processNewMessagesOnReturn(newMessages) {
+    // Skip our own messages and clanker messages
+    const relevantMessages = newMessages.filter(m => !m.isLocalUser && !m.isClanker);
+
+    if (relevantMessages.length === 0) {
+      console.log('[Clanker] No relevant new messages to process');
+      return;
+    }
+
+    // Find the last message that should trigger a response
+    let triggerMessage = null;
+
+    if (state.mode === MODES.ACTIVE) {
+      // In Active mode, check if any new message warrants a response
+      for (const msg of relevantMessages) {
+        if (shouldRespondActive(msg)) {
+          triggerMessage = msg;
+        }
+      }
+    } else if (state.mode === MODES.AVAILABLE) {
+      // In Available mode, check if any new message mentions clanker
+      for (const msg of relevantMessages) {
+        if (Parser.mentionsClanker(msg.content)) {
+          triggerMessage = msg;
+        }
+      }
+    }
+
+    if (triggerMessage) {
+      console.log('[Clanker] Triggering response to message from while away:', triggerMessage.id);
+      scheduleResponse(triggerMessage);
     }
   }
 
@@ -1048,6 +1181,9 @@
       return;
     }
     state.processedMessageIds.add(parsed.id);
+
+    // Update last processed message ID for this conversation
+    saveLastProcessedMessageId(parsed.id);
 
     console.log('[Clanker] New message:', parsed);
 
@@ -1274,8 +1410,11 @@
     const context = Parser.parseConversation();
     const allMessages = context.messages;
 
+    // Get history size from config, fall back to default
+    const historySize = state.config?.historySize || DEFAULT_HISTORY_SIZE;
+
     // Split into older (to be summarized) and recent (sent literally)
-    const recentStart = Math.max(0, allMessages.length - RECENT_MESSAGE_COUNT);
+    const recentStart = Math.max(0, allMessages.length - historySize);
     const olderMessageCount = recentStart;
     const recentMessages = [];
 
