@@ -8,7 +8,7 @@ You will require an API key but costs should be very low. Analysis of a real, ac
 
 It is unlikely Google would allow this in the Web Store, so you must "sideload" it.
  
-* Clone the repository locally
+* Clone this repository (`git clone https://github.com/MV10/clanker.git`)
 * Open `chrome://extensions/` (or `brave://extensions/` or equivalent)
 * Enable `Developer mode`
 * Click `Load unpacked`

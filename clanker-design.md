@@ -24,7 +24,9 @@
 ## Message ID Formats
 * Outgoing messages use UUID format: `cad0b185-eb06-4110-a322-fd94474e1343`
 * Incoming messages use base64-like format: `MxJQ=xCObWTheaIK-gbF0nfA`
-* These IDs are stable and should be used to detect new messages
+* Temporary IDs use `tmp_` prefix: `tmp_615187582765` (not yet confirmed by server)
+* Temp IDs are converted to permanent IDs by Google Messages after server confirmation
+* Track messages using hybrid approach: ID primary, content+sender fallback for temp→permanent conversion
 
 ## aria-label Format
 * Message text is in the `aria-label` attribute of `<mws-text-message-part>`
@@ -77,22 +79,39 @@
 # Conversation Switching
 * Detect the current conversation ID from the URL path or participant names
 * Monitor for URL changes (SPA navigation) and browser history events
-* When the conversation changes, reset all conversation-specific state:
-  - Clear participant list
-  - Clear processed message IDs
+* When the conversation changes:
+  - Clear participant list and processed message IDs
   - Cancel any pending LLM response
-  - Reset mode to Deactivated (default for new conversations)
+  - Load stored mode, summary, customization, and last processed message for the conversation
+  - Restore mode from storage (Deactivated is default only for new/unknown conversations)
+* Guard against race conditions during conversation switch:
+  - Block message processing until conversation parse is complete
+  - Use hybrid message tracking to handle temp→permanent ID conversion
+
+## Messages While Away
+When returning to a conversation, detect and handle messages that arrived while viewing another conversation:
+* Compare current messages against the stored last processed message
+* Use hybrid matching: try message ID first, fall back to content+sender match
+* In Active mode: consult LLM for any new human messages
+* In Available mode: consult LLM only if new messages mention Clanker
+* Fallback safety: skip if the trigger message already has a Clanker response following it
 
 # LLM Behaviors
 * Comment but do not dominate the conversation
 * Comments should be brief, consistent with the style of SMS chatting
 * Do not respond every time another participant speaks, not all comments seek your input
-* In Active mode: respond to questions and when "clanker" is mentioned
-* In Available mode: only respond when "clanker" is mentioned
+* In Active mode: LLM is consulted for ALL new human messages; LLM decides whether to respond (can return null)
+* In Available mode: LLM is only invoked when "clanker" is mentioned
 * If the local user is already typing a message, the LLM should not respond
 * Humans are slow; before responding, wait a few seconds to give the local user a chance to start typing
 * If a new message arrives while a response is pending, cancel the pending response and evaluate the new message instead (debouncing)
-* Recent images in the conversation should be described to the LLM for context (last 3 images)
+* Images in the conversation are included inline in the message history as [IMAGE: blob:...] references
+
+## Concurrency Control
+* Track LLM request IDs to invalidate superseded requests
+* Prevent overlapping LLM requests with an in-flight flag
+* Validate request ID before sending response (discard if superseded)
+* Cancel pending responses when mode changes or conversation switches
 
 # Conversation Summarization
 
@@ -112,7 +131,8 @@ To bound token growth and manage context efficiently, the extension uses a hybri
 * The LLM can still update the summary even when not responding: `{"response": null, "summary": "..."}`
 
 ## Hybrid Context Strategy
-* Recent messages (last 10) are sent literally to preserve conversational context
+* Recent messages are sent literally to preserve conversational context
+* Message history size is configurable (10-500, default 20, recommended 50)
 * Older messages are represented by a summary stored per-conversation
 * The summary is included as a system message: `[CONVERSATION SUMMARY - older messages not shown]`
 * This bounds token usage while preserving important historical context
@@ -217,8 +237,8 @@ The extension operates in one of four modes, controlled via a browser context me
 
 ## Active
 * The extension is fully running and calling the LLM
-* Responds to questions (messages containing "?")
-* Responds when "clanker" is mentioned
+* LLM is consulted for every new human message
+* LLM decides whether to respond (can return null to skip)
 * The LLM participates naturally in the conversation
 
 ## Context Menu
@@ -230,9 +250,9 @@ The extension operates in one of four modes, controlled via a browser context me
 ## Mode Transition Messages
 When modes change, the extension inserts a message to inform conversation participants:
 
-* **Deactivated → Available**: Extension inserts "[clanker] AI is available but will only reply if you address it directly by name."
-* **Deactivated → Active**: LLM generates a brief activation message (e.g., "Hey everyone, I'm here!")
-* **Active → Deactivated** or **Available → Deactivated**: Extension inserts "[clanker] The AI has been deactivated for this conversation."
+* **Any → Available**: Extension inserts "[clanker] AI is available but will only reply if you address it directly by name."
+* **Any → Active**: LLM generates a brief activation message (e.g., "Hey everyone, I'm here!")
+* **Any → Deactivated**: Extension inserts "[clanker] The AI has been deactivated for this conversation."
 
 The LLM-generated activation message receives context about the conversation and a one-time instruction to announce its presence briefly and casually.
 
@@ -240,16 +260,28 @@ The LLM-generated activation message receives context about the conversation and
 
 ## IndexedDB (persistent)
 * Uses IndexedDB database "ClankerDB" with object store "settings"
-* Store user's OpenAI LLM API key, endpoint, and model selection
-* Store the local user's name (identified in the web page with "You said:" prefixes)
-* Store customization directives keyed on conversation participants
 * Shared storage module (storage.js) provides async get/set/remove/clear operations
 * Works in both page context and service worker context
 
-## Tab-Based Mode Storage
-* Operating mode is stored per-tab in the background service worker
-* Mode is reset to Deactivated when switching conversations
-* Mode state is lost when the tab is closed or the browser restarts
+### Global Settings
+* `apiEndpoint` - LLM API endpoint URL
+* `apiKey` - LLM API key
+* `model` - LLM model identifier
+* `userName` - Local user's display name (replaces "You" in LLM context)
+* `historySize` - Number of recent messages to send literally (10-500, default 20)
+
+### Per-Conversation Data
+* `mode_{conversationId}` - Operating mode for the conversation
+* `summary_{conversationId}` - LLM-generated conversation summary
+* `customization_{conversationId}` - Active persona/style directive
+* `lastMessage_{conversationId}` - Last processed message (id, content, sender) for hybrid tracking
+* `image_cache_{conversationId}` - Cached optimized image data
+
+## Per-Conversation Mode Storage
+* Operating mode is stored per-conversation in IndexedDB (`mode_{conversationId}`)
+* Mode persists across browser sessions and tab closures
+* Mode is restored when returning to a conversation
+* New/unknown conversations default to Deactivated
 
 ## API Endpoint Validation
 * Endpoint URL must be valid http:// or https:// URL
