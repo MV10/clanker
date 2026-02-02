@@ -65,6 +65,9 @@ const ClankerSelectors = {
   MESSAGE_TEXT_PART: 'mws-text-message-part',
   MESSAGE_IMAGE_PART: 'mws-image-message-part',
 
+  // Header elements (for participant extraction)
+  HEADER_TITLE: '[data-e2e-header-title]',
+
   // Input controls
   INPUT_FIELD: '[data-e2e-message-input]',
   INPUT_BOX: '[data-e2e-message-input-box]',
@@ -183,37 +186,37 @@ const ClankerParser = {
   },
 
   /**
-   * Extract participant names from visible messages
+   * Extract participant names from conversation header
+   * The header title contains participant names (more reliable than scanning messages)
    * @returns {string[]}
    */
   extractParticipantNames() {
-    const participants = new Set();
+    const participants = [];
 
-    // Check text message parts
-    const textParts = document.querySelectorAll(ClankerSelectors.MESSAGE_TEXT_PART);
-    for (const el of textParts) {
-      const ariaLabel = el.getAttribute('aria-label');
-      if (!ariaLabel) continue;
+    // Get participant names from conversation header
+    const headerTitle = document.querySelector(ClankerSelectors.HEADER_TITLE);
+    if (headerTitle) {
+      // The header may contain one or more h2 elements with participant names
+      const nameElements = headerTitle.querySelectorAll('h2');
+      for (const el of nameElements) {
+        const name = el.textContent?.trim();
+        if (name && name !== 'You') {
+          participants.push(name);
+        }
+      }
 
-      const match = ariaLabel.match(/^(.+?)\s+said:/i);
-      if (match && match[1] !== 'You') {
-        participants.add(match[1].trim());
+      // If no h2 found, try getting text content directly (fallback)
+      if (participants.length === 0) {
+        const text = headerTitle.textContent?.trim();
+        if (text && text !== 'You') {
+          // For group chats, names might be comma-separated
+          const names = text.split(',').map(n => n.trim()).filter(n => n && n !== 'You');
+          participants.push(...names);
+        }
       }
     }
 
-    // Check image message parts
-    const imageParts = document.querySelectorAll(ClankerSelectors.MESSAGE_IMAGE_PART);
-    for (const el of imageParts) {
-      const ariaLabel = el.getAttribute('aria-label');
-      if (!ariaLabel) continue;
-
-      const match = ariaLabel.match(/^(.+?)\s+sent an image/i);
-      if (match && match[1] !== 'You') {
-        participants.add(match[1].trim());
-      }
-    }
-
-    return Array.from(participants);
+    return participants;
   },
 
   /**
