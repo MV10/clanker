@@ -1289,6 +1289,9 @@
         const role = msg.isClanker ? 'assistant' : 'user';
         let content = msg.content;
 
+        // Replace local user references (e.g., "your message" in replies)
+        content = replaceLocalUserReferences(content);
+
         if (msg.isClanker) {
           content = content.replace(/^\[clanker\]\s*/i, '');
         } else {
@@ -1306,6 +1309,9 @@
         // Combo message: include both text and image reference
         const role = msg.isClanker ? 'assistant' : 'user';
         let textContent = msg.content;
+
+        // Replace local user references (e.g., "your message" in replies)
+        textContent = replaceLocalUserReferences(textContent);
 
         if (msg.isClanker) {
           textContent = textContent.replace(/^\[clanker\]\s*/i, '');
@@ -1336,12 +1342,20 @@
   }
 
   /**
-   * Replace "You" with the configured user name in a string
+   * Replace "You" and "your" references with the configured user name
+   * Handles sender attribution and reply references
    */
-  function replaceYouWithUserName(text) {
+  function replaceLocalUserReferences(text) {
     const userName = getLocalUserName();
     if (userName === 'You') return text;
-    return text.replace(/\bYou\b/g, userName);
+
+    return text
+      // "your message" → "Keith's message" (for reply references)
+      .replace(/\byour message\b/gi, `${userName}'s message`)
+      // "to you" → "to Keith" (for other references)
+      .replace(/\bto you\b/gi, `to ${userName}`)
+      // Standalone "You" as sender
+      .replace(/\bYou\b/g, userName);
   }
 
   /**
