@@ -105,7 +105,8 @@ const ClankerPatterns = {
   REACTION: /([^.]+?)\s+reacted\s+with\s+(\w+)\./gi,
 
   // Pattern to detect when Clanker is mentioned (for Available mode)
-  CLANKER_MENTION: /clanker/i,
+  // Matches both "clanker" and "clank"
+  CLANKER_MENTION: /clank(er)?/i,
 };
 
 /**
