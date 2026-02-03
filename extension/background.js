@@ -54,6 +54,7 @@ const MENU_IDS = {
   SEPARATOR2: 'clanker-separator2',
   DIAGNOSTICS: 'clanker-diagnostics',
   DIAG_LOG: 'clanker-diag-log',
+  DIAG_DEACTIVATE_ALL: 'clanker-diag-deactivate-all',
   DIAG_RESET_CONVERSATION: 'clanker-diag-reset-conversation',
   DIAG_RESET_ALL: 'clanker-diag-reset-all'
 };
@@ -684,6 +685,34 @@ function escapeHtml(text) {
 }
 
 /**
+ * Handle diagnostic: Deactivate in all conversations
+ * Deactivates current conversation with full mode-change processing,
+ * then sets all other stored conversation modes to deactivated.
+ */
+async function handleDiagDeactivateAll(tabId) {
+  try {
+    // Deactivate current conversation (sends message, detaches debugger, etc.)
+    await handleSetMode(tabId, MODES.DEACTIVATED);
+
+    // Set all stored per-conversation modes to deactivated
+    const allData = await Storage.getAll();
+    const updates = {};
+    for (const key of Object.keys(allData)) {
+      if (key.startsWith('mode_') && allData[key] !== MODES.DEACTIVATED) {
+        updates[key] = MODES.DEACTIVATED;
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      await Storage.set(updates);
+      console.log(`[Clanker] Deactivated ${Object.keys(updates).length} other conversation(s)`);
+    }
+
+  } catch (error) {
+    console.error('[Clanker] Deactivate all error:', error);
+  }
+}
+
+/**
  * Handle diagnostic: Reset current conversation state
  */
 async function handleDiagResetConversation(tabId) {
@@ -843,11 +872,20 @@ function createContextMenu() {
       documentUrlPatterns: ['https://messages.google.com/*']
     });
 
+    // Diagnostic: Deactivate in all conversations
+    chrome.contextMenus.create({
+      id: MENU_IDS.DIAG_DEACTIVATE_ALL,
+      parentId: MENU_IDS.DIAGNOSTICS,
+      title: 'Deactivate In All Conversations',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://messages.google.com/*']
+    });
+
     // Diagnostic: Reset conversation state
     chrome.contextMenus.create({
       id: MENU_IDS.DIAG_RESET_CONVERSATION,
       parentId: MENU_IDS.DIAGNOSTICS,
-      title: 'Reset Conversation State',
+      title: 'Purge Conversation State',
       contexts: ['page'],
       documentUrlPatterns: ['https://messages.google.com/*']
     });
@@ -856,7 +894,7 @@ function createContextMenu() {
     chrome.contextMenus.create({
       id: MENU_IDS.DIAG_RESET_ALL,
       parentId: MENU_IDS.DIAGNOSTICS,
-      title: 'Reset All State Data...',
+      title: 'Purge All State Data...',
       contexts: ['page'],
       documentUrlPatterns: ['https://messages.google.com/*']
     });
@@ -937,6 +975,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     case MENU_IDS.DIAG_LOG:
       // Show conversation state in a new tab
       handleDiagLog(tab.id);
+      break;
+
+    case MENU_IDS.DIAG_DEACTIVATE_ALL:
+      // Deactivate in all conversations
+      handleDiagDeactivateAll(tab.id);
       break;
 
     case MENU_IDS.DIAG_RESET_CONVERSATION:
