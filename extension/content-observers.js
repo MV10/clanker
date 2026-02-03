@@ -49,6 +49,7 @@
       const target = event.target;
       if (target.matches && target.matches(inputSelector)) {
         state.userTyping = target.textContent.trim().length > 0;
+        if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
       }
     }, true);
 
@@ -56,12 +57,14 @@
     document.addEventListener('focusin', (event) => {
       if (event.target.matches && event.target.matches(inputSelector)) {
         state.userTyping = event.target.textContent.trim().length > 0;
+        if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
       }
     }, true);
 
     document.addEventListener('focusout', (event) => {
       if (event.target.matches && event.target.matches(inputSelector)) {
         state.userTyping = event.target.textContent.trim().length > 0;
+        if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
       }
     }, true);
   }
@@ -91,6 +94,12 @@
 
         const newConversationId = Parser.detectConversationId();
         if (newConversationId !== state.currentConversationId) {
+          // Detect sidebar-initiated vs user-initiated navigation
+          if (window.ClankerSidebar && !window.ClankerSidebar.isSidebarNavigation()
+              && window.ClankerSidebar.isProcessing()) {
+            window.ClankerSidebar.notifyManualConversationChange(newConversationId);
+          }
+
           isProcessingChange = true;
           state.conversationChanging = true;  // Block message processing
           state.parseComplete = false;        // Mark parse as incomplete

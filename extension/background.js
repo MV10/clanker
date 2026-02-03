@@ -12,7 +12,8 @@ const STORAGE_KEYS = {
   API_KEY: 'apiKey',
   MODEL: 'model',
   USER_NAME: 'userName',
-  HISTORY_SIZE: 'historySize'
+  HISTORY_SIZE: 'historySize',
+  SIDEBAR_MODE: 'sidebarMode'
 };
 
 /**
@@ -490,7 +491,8 @@ async function handleGetConfig() {
                         config[STORAGE_KEYS.API_KEY] &&
                         config[STORAGE_KEYS.MODEL]),
         userName: config[STORAGE_KEYS.USER_NAME] || null,
-        historySize: config[STORAGE_KEYS.HISTORY_SIZE] || 20
+        historySize: config[STORAGE_KEYS.HISTORY_SIZE] || 20,
+        sidebarMode: config[STORAGE_KEYS.SIDEBAR_MODE] || 'ignore'
       }
     };
   } catch (error) {

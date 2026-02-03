@@ -11,7 +11,8 @@ const STORAGE_KEYS = {
   API_KEY: 'apiKey',
   MODEL: 'model',
   USER_NAME: 'userName',
-  HISTORY_SIZE: 'historySize'
+  HISTORY_SIZE: 'historySize',
+  SIDEBAR_MODE: 'sidebarMode'
 };
 
 /**
@@ -24,6 +25,7 @@ const elements = {
   model: document.getElementById('model'),
   userName: document.getElementById('user-name'),
   historySize: document.getElementById('history-size'),
+  sidebarMode: document.getElementById('sidebar-mode'),
   saveBtn: document.getElementById('save-btn'),
   testBtn: document.getElementById('test-btn'),
   statusBanner: document.getElementById('status-banner'),
@@ -51,6 +53,9 @@ async function loadSettings() {
     }
     if (result[STORAGE_KEYS.HISTORY_SIZE]) {
       elements.historySize.value = result[STORAGE_KEYS.HISTORY_SIZE];
+    }
+    if (result[STORAGE_KEYS.SIDEBAR_MODE]) {
+      elements.sidebarMode.value = result[STORAGE_KEYS.SIDEBAR_MODE];
     }
 
     updateConnectionStatus();
@@ -113,6 +118,7 @@ async function saveSettings(event) {
   const model = elements.model.value.trim();
   const userName = elements.userName.value.trim();
   const historySize = parseInt(elements.historySize.value, 10) || 20;
+  const sidebarMode = elements.sidebarMode.value;
 
   // Validate endpoint URL
   const validation = validateEndpoint(endpoint);
@@ -133,7 +139,8 @@ async function saveSettings(event) {
     [STORAGE_KEYS.API_KEY]: apiKey,
     [STORAGE_KEYS.MODEL]: model,
     [STORAGE_KEYS.USER_NAME]: userName,
-    [STORAGE_KEYS.HISTORY_SIZE]: clampedHistorySize
+    [STORAGE_KEYS.HISTORY_SIZE]: clampedHistorySize,
+    [STORAGE_KEYS.SIDEBAR_MODE]: sidebarMode
   };
 
   try {

@@ -65,6 +65,10 @@
     setupMessageListener();
     Observers.setupVisibilityListener();
 
+    if (window.ClankerSidebar) {
+      window.ClankerSidebar.initialize();
+    }
+
     // If no conversation is active, wait for one to be selected
     if (!verification.hasActiveConversation) {
       console.log('[Clanker] No active conversation, waiting for selection');

@@ -1,6 +1,10 @@
 # Enhancements, Ideas, etc.
 
+* Edge-case bug: person A posts a reply, LLM starts processing, person B starts a reply, LLM response arrives but is added to conversation twice.
+
 * "Cannot recognize page structure" warning shows too soon when the page loads slowly. Detect page-load?
+
+* I think the extension either aborts or delays contacting the LLM if the user has started typing in the input textarea field. However, the LLM can take a few seconds to respond. If the user begins typing during that wait, this is not detected and the LLM response gets mixed with the user's content. The LLM can be contacted even if the user has started typing, but the LLM output should be delayed until the textarea is empty.
 
 * For long-running conversations, have the LLM generate and update notes about each participant, areas of interest, etc, and store these with conversation data, and send them with each request.
  
@@ -16,75 +20,4 @@
 
 * Optionally allow Clankers to be named? Scan the message sidebar to look for real username conflicts?
 
-## Inactive Sidebar Conversation Response
-
-* Add a config-page checkbox (off by default) for Respond to Inactive Conversations and apply these rules when true:
-* Create separate parser-sidebar.js and content-sidebar.js modules for the work described here
-* Detect changes to the conversation list in the sidebar
-* The foreground conversation is also in the sidebar; ignore sidebar changes for the foreground conversation
-* Ignore changes to conversations which either have no stored state data, or are in the Deactivated state
-* If the sidebar conversation is in Available mode but the new message doesn't address Clanker, ignore the change
-* If the user is typing or an LLM request is in flight, wait for completion (response arrives in history or LLM does not reply)
-* Once the foreground conversation is idle, store the foreground conversation ID then navigate to the updated sidebar conversation
-* For the duration of the sidebar handling, note and store other sidebar changes (except the original conversation) but do not react
-* Allow the LLM to respond to the conversation and wait for the response to appear in history
-* If other sidebar changes were stored, process the next one with the same rules
-* Once all sidebar changes are handled, navigate back to the original foreground conversation and resume normal processing
-
-## Conversation Sidebar Structure
-
-Each conversation in the sidebar is an <a> element with class list-item and role option. The structure:
-
- <a class="list-item" href=".../conversations/{CONVERSATION_ID}"  
-    data-e2e-conversation=""    
-    data-e2e-is-pinned="true/false"
-    data-e2e-is-muted="true/false"
-    data-e2e-is-unread="true/false"
-    aria-selected="true/false">
-
-    <div class="avatar-container">
-      <mws-conversation-avatar>...</mws-conversation-avatar>
-    </div>
-
-    <div class="text-content">
-      <h2 class="name">
-        <span data-e2e-conversation-name="">Dad, Mom</span>
-      </h2>
-      <div data-e2e-conversation-snippet="">
-        <mws-conversation-snippet>
-          <span>You: [clanker] Sweet, headin' down?...</span>
-        </mws-conversation-snippet>
-      </div>
-    </div>
-
-    <div class="list-item-info">
-      <mws-relative-timestamp class="snippet-timestamp">
-        4:11 AM
-      </mws-relative-timestamp>
-      <button data-e2e-conversation-list-item-menu=""
-              aria-label="Options for Dad, Mom">
-      </button>
-    </div>
- </a>                                                                                                   
-
-### Key Data Elements
-
-* Conversation ID — Encoded in the href attribute, extractable via /conversations/([^/?]+). Format is base64-like (likely protobuf), e.g. CghQyd_jHAdh-hICNTg. The active conversation can retrieve the ID from window.location.href.
-
-* Participants — Plain text in <span data-e2e-conversation-name="">. Single name for 1:1, comma-separated for groups (e.g. "Dad, Mom", "Hammy, Sherry"). No IDs, phone numbers, or individual metadata.
-
-* Message snippet — Only one message is stored, the most recent. Format is "Sender: message text" or "You: message text". No message ID or timestamp is attached to the snippet itself. The message is complete, even though the display is truncated.
-
-* Timestamp — Relative only in the DOM ("4:11 AM", "Mon", "Jan 25"). No absolute timestamps, epoch values, or ISO dates in data attributes or aria-labels. The <mws-relative-timestamp> has a <span class="weekday-aria-label"> with the  
-full day name for accessibility, but no hidden absolute time.
-
-* State flags — data-e2e-is-pinned, data-e2e-is-muted, data-e2e-is-unread (all "true"/"false" strings).
-
-### Notable Limitations
-
-- No absolute timestamps anywhere in the sidebar DOM
-- No participant IDs or contact details — names only
-- No message count or additional message history
-- No message ID on the snippet
-- Your assumption is correct: only one recent message is available per conversation item
 

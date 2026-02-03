@@ -78,8 +78,15 @@
   async function generateAndSendResponse(requestId) {
     console.log('[Clanker] Generating LLM response (request', requestId + ')...');
 
+    // Capture origin context before async work (for deferred delivery on conversation switch)
+    const originConversationId = state.currentConversationId;
+    const originMessages = state.conversation?.messages;
+    const originLastMessageId = originMessages?.length > 0
+      ? originMessages[originMessages.length - 1].id : null;
+
     // Mark request as in-flight
     state.llmInFlight = true;
+    if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
 
     const { recentMessages, olderMessageCount } = buildConversationHistory();
     const systemPrompt = buildSystemPrompt(olderMessageCount);
@@ -117,7 +124,18 @@
 
       // Check if this request was superseded while waiting for LLM
       if (requestId !== state.llmRequestId) {
-        console.log('[Clanker] Request', requestId, 'superseded by', state.llmRequestId, '- discarding response');
+        console.log('[Clanker] Request', requestId, 'superseded by', state.llmRequestId);
+        // If conversation changed, defer the response for later delivery
+        if (originConversationId !== state.currentConversationId && response.success && response.content) {
+          state.deferredResponse = {
+            conversationId: originConversationId,
+            content: response.content,
+            summary: response.summary || null,
+            customization: response.customization,
+            lastMessageId: originLastMessageId
+          };
+          console.log('[Clanker] Response deferred for conversation:', originConversationId);
+        }
         return;
       }
 
@@ -154,6 +172,7 @@
     } finally {
       // Always clear in-flight flag
       state.llmInFlight = false;
+      if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
     }
   }
 

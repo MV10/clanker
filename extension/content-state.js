@@ -42,7 +42,21 @@
     parseComplete: true,          // True after parseExistingConversation completes (default true for normal operation)
     // Last processed message tracking (for detecting new messages on return)
     // Stores {id, content, sender} for hybrid matching
-    lastProcessedMessage: null
+    lastProcessedMessage: null,
+    // Deferred LLM response (stored when conversation changes mid-request)
+    deferredResponse: null,
+    // Sidebar conversation monitoring
+    sidebar: {
+      mode: 'ignore',
+      todoQueue: [],                 // conversation IDs to process
+      returnToConversationId: null,  // foreground to return to
+      isProcessing: false,           // true while navigating sidebar conversations
+      currentlyProcessingId: null,   // conversation being processed
+      lastActivityTimestamp: 0,      // last user/LLM/message activity
+      idleTimeoutMs: 10 * 60 * 1000,
+      idleCheckTimer: null,
+      pendingSnippets: new Map(),    // conversationId -> last known snippet text
+    }
   };
 
   /**
