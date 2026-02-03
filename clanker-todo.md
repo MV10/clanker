@@ -1,7 +1,5 @@
 # Enhancements, Ideas, etc.
 
-* Edge-case bug: person A posts a reply, LLM starts processing, person B starts a reply, LLM response arrives but is added to conversation twice.
-
 * "Cannot recognize page structure" warning shows too soon when the page loads slowly. Detect page-load?
 
 * I think the extension either aborts or delays contacting the LLM if the user has started typing in the input textarea field. However, the LLM can take a few seconds to respond. If the user begins typing during that wait, this is not detected and the LLM response gets mixed with the user's content. The LLM can be contacted even if the user has started typing, but the LLM output should be delayed until the textarea is empty.

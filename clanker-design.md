@@ -288,3 +288,112 @@ The LLM-generated activation message receives context about the conversation and
 * Non-localhost endpoints must use https://
 * Localhost URLs (localhost, 127.0.0.1, ::1, *.local) may use http:// for local LLM development
 * Validation occurs both when saving settings and before each API request
+
+# Sidebar Inactive Conversation Processing
+
+The extension can only interact with the single foreground conversation loaded in the main content area. This feature monitors the sidebar conversation list for new messages in non-foreground conversations and briefly navigates to them for LLM processing before returning to the user's foreground conversation.
+
+## Sidebar Mode Configuration
+
+A settings dropdown ("Inactive Conversation Response") controls behavior with three options:
+
+* **Ignore new messages** (default) — Sidebar is not monitored at all. No observer is created, no processing occurs.
+* **Process new messages** — New messages in non-foreground conversations are processed as soon as the foreground is available (user is not typing, no LLM request in flight, no pending response timer, no conversation change in progress).
+* **Respond when idle (10min)** — New messages are queued but only processed after 10 minutes of foreground inactivity. Activity is defined as receiving new messages, user input activity, or LLM activity.
+
+The setting is stored in IndexedDB as `sidebarMode`.
+
+## Sidebar DOM Structure
+
+Each conversation in the sidebar is an anchor element:
+* Selector: `a[data-e2e-conversation]`
+* Conversation ID: extracted from the `href` attribute via `/conversations/([^/?#]+)`
+* Participant names: `[data-e2e-conversation-name]` element text
+* Message snippet: `mws-conversation-snippet span` element text (format: `"Sender: message text"` or `"You: message text"`)
+* State flags: `data-e2e-is-pinned`, `data-e2e-is-muted`, `data-e2e-is-unread` (string booleans)
+* Selected state: `aria-selected="true"` indicates the foreground conversation
+* The conversation list container is the `<mws-conversations-list>` element
+
+## Change Detection
+
+* A MutationObserver watches the conversation list element for `childList`, `subtree`, and `characterData` changes
+* Mutations are debounced (500ms) before processing
+* On each batch, all sidebar conversation items are scanned
+* The current foreground conversation and any conversation being actively processed are skipped
+* Each conversation's snippet text is compared against a stored snapshot (`pendingSnippets` map)
+* If unchanged, the conversation is skipped
+* If changed but the snippet starts with `"You:"`, it is an outgoing message and skipped
+* On initialization, a full snapshot of all conversation snippets is captured as the baseline
+
+## Conversation Evaluation
+
+When a snippet change is detected, the conversation is evaluated against its stored mode:
+* No stored mode or Deactivated mode — skip (never process conversations the user hasn't activated)
+* Available mode — only process if the snippet text mentions Clanker
+* Active mode — always process
+* Conversations that pass evaluation are added to the todo queue (if not already present)
+
+## Processing Orchestration
+
+### Queue and Timing
+* The todo queue holds conversation IDs awaiting processing
+* Only one conversation is processed at a time (`isProcessing` flag)
+* In **Process** mode: processing begins as soon as the foreground is available (checked via 2-second polling, 2-minute timeout)
+* In **Idle** mode: processing waits for 10 minutes of foreground inactivity (checked via 30-second polling)
+* Both modes require foreground availability (not typing, no LLM in flight, no pending timer, not changing conversations)
+
+### Navigation and Processing
+1. Store the current foreground conversation ID as the return target
+2. Display a banner: "Clanker is processing an inactive conversation, please wait..."
+3. Find the sidebar anchor for the target conversation and click it
+4. Wait for the conversation change to be confirmed (poll `state.currentConversationId`, 200ms interval, 10s timeout)
+5. The existing conversation-change pipeline handles loading: `handleConversationChange` → `parseExistingConversation` → mode restore → message processing → LLM invocation
+6. Wait for the pipeline to complete: `parseComplete` is true, no LLM in flight, no pending response timer, plus a 1-second settle period for sent messages to appear in the DOM (polled at 500ms, 60s safety timeout)
+7. Process the next conversation in the queue, or return to the foreground
+
+### Return to Foreground
+* After all queued conversations are processed, navigate back to the stored foreground conversation ID
+* The return navigation uses the same click-and-wait mechanism
+* All processing flags are cleared and the banner is removed
+
+## User Intervention
+
+If the user manually changes the conversation while sidebar processing is in progress:
+* The conversation observer detects that the navigation was not initiated by the sidebar module (`isSidebarNavigation()` returns false while `isProcessing()` returns true)
+* The new conversation is removed from the todo queue if present
+* The entire queue is cleared (the user took control)
+* The `userIntervened` flag is set, causing all pending waits (navigation, processing) to abort
+* Processing finishes and the banner is removed
+* The sidebar module does not attempt to return to the original foreground
+
+## Activity Tracking Integration
+
+Multiple modules feed into the sidebar activity timestamp:
+* **content-observers.js** — URL changes, history events, input field mutations
+* **content-messages.js** — New messages processed
+* **content-llm.js** — LLM requests started and completed
+
+This timestamp is used by idle mode to determine when 10 minutes of inactivity have elapsed.
+
+## Sidebar State
+
+All sidebar state is in-memory only (cleared on page refresh):
+* `sidebar.mode` — Current sidebar mode (ignore/process/idle)
+* `sidebar.todoQueue` — Array of conversation IDs awaiting processing
+* `sidebar.returnToConversationId` — Foreground conversation to return to after processing
+* `sidebar.isProcessing` — True while navigating and processing sidebar conversations
+* `sidebar.currentlyProcessingId` — The conversation currently being processed
+* `sidebar.lastActivityTimestamp` — Last foreground activity time
+* `sidebar.idleTimeoutMs` — Idle threshold (10 minutes)
+* `sidebar.idleCheckTimer` — Timer handle for periodic idle checks
+* `sidebar.pendingSnippets` — Map of conversation ID to last known snippet text
+
+## Deferred LLM Responses
+
+If an LLM request is in-flight when the user switches conversations (including sidebar-initiated switches), the response is not discarded. Instead:
+* The origin conversation ID and last message ID are captured before the LLM call
+* When the response arrives and the request is superseded (conversation changed), it is stored in `state.deferredResponse`
+* When the user returns to the original conversation, `parseExistingConversation` checks for a matching deferred response
+* If the last message ID still matches (no new messages arrived while away), the deferred response is delivered
+* If new messages arrived, the deferred response is discarded (stale context)
+* Only one deferred response is stored at a time (single slot, in-memory only)

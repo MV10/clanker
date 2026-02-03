@@ -37,7 +37,10 @@
     const requestId = state.llmRequestId;
 
     state.pendingResponseMessageId = triggerMessage.id;
-    state.pendingResponseTimer = setTimeout(async () => {
+
+    const delay = state.responseDelayMinMs + Math.random() * (state.responseDelayMaxMs - state.responseDelayMinMs);
+
+    const attemptResponse = async () => {
       state.pendingResponseTimer = null;
       state.pendingResponseMessageId = null;
 
@@ -59,14 +62,19 @@
         return;
       }
 
-      // Check if another LLM request is already in flight
+      // If another LLM request is in flight, wait for it to complete.
+      // The retry timer is stored in pendingResponseTimer so cancelPendingResponse
+      // will clear it if a newer message arrives (newer message takes priority).
       if (state.llmInFlight) {
-        console.log('[Clanker] LLM request already in flight, skipping');
+        console.log('[Clanker] LLM request in flight, will retry after completion');
+        state.pendingResponseTimer = setTimeout(attemptResponse, 500);
         return;
       }
 
       await generateAndSendResponse(requestId);
-    }, state.responseDelayMinMs + Math.random() * (state.responseDelayMaxMs - state.responseDelayMinMs));
+    };
+
+    state.pendingResponseTimer = setTimeout(attemptResponse, delay);
 
     console.log('[Clanker] Scheduled response to message:', triggerMessage.id, '(request', requestId + ')');
   }
@@ -78,17 +86,17 @@
   async function generateAndSendResponse(requestId) {
     console.log('[Clanker] Generating LLM response (request', requestId + ')...');
 
-    // Capture origin context before async work (for deferred delivery on conversation switch)
+    // Capture origin conversation before async work (for deferred delivery on conversation switch)
     const originConversationId = state.currentConversationId;
-    const originMessages = state.conversation?.messages;
-    const originLastMessageId = originMessages?.length > 0
-      ? originMessages[originMessages.length - 1].id : null;
 
     // Mark request as in-flight
     state.llmInFlight = true;
     if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
 
-    const { recentMessages, olderMessageCount } = buildConversationHistory();
+    // Fresh DOM parse — lastMessageId reflects actual current state, not the
+    // potentially stale state.conversation.messages from initial parse
+    const { recentMessages, olderMessageCount, lastMessageId } = buildConversationHistory();
+    const originLastMessageId = lastMessageId;
     const systemPrompt = buildSystemPrompt(olderMessageCount);
 
     console.log('[Clanker] Sending to LLM:', {
@@ -321,6 +329,10 @@
     const context = Parser.parseConversation();
     const allMessages = context.messages;
 
+    // Track last message ID for deferred response matching
+    const lastMessageId = allMessages.length > 0
+      ? allMessages[allMessages.length - 1].id : null;
+
     // Get history size from config, fall back to default
     const historySize = state.config?.historySize || DEFAULT_HISTORY_SIZE;
 
@@ -380,7 +392,7 @@
       }
     }
 
-    return { recentMessages, olderMessageCount };
+    return { recentMessages, olderMessageCount, lastMessageId };
   }
 
   /**
