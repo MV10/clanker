@@ -13,7 +13,8 @@ const STORAGE_KEYS = {
   MODEL: 'model',
   USER_NAME: 'userName',
   HISTORY_SIZE: 'historySize',
-  SIDEBAR_MODE: 'sidebarMode'
+  SIDEBAR_MODE: 'sidebarMode',
+  WEB_SEARCH: 'webSearch'
 };
 
 /**
@@ -171,6 +172,118 @@ function isValidEndpoint(url) {
 }
 
 /**
+ * Detect API provider from endpoint URL hostname.
+ * Used to adapt web search tool format per provider.
+ * @param {string} endpoint
+ * @returns {string} 'xai' | 'anthropic' | 'openai' | 'generic'
+ */
+function detectProvider(endpoint) {
+  try {
+    const host = new URL(endpoint).hostname.toLowerCase();
+    if (host.includes('x.ai') || host.includes('xai')) return 'xai';
+    if (host.includes('anthropic') || host.includes('claude')) return 'anthropic';
+    if (host.includes('openai')) return 'openai';
+    return 'generic';
+  } catch {
+    return 'generic';
+  }
+}
+
+/**
+ * Get the API URL, accounting for provider-specific endpoint paths.
+ * xAI web search requires the Responses API (/responses), not Chat Completions.
+ * @param {string} endpoint - Base endpoint URL
+ * @param {string} provider - Detected provider
+ * @param {boolean} webSearch - Whether web search is enabled
+ * @returns {string}
+ */
+function getApiUrl(endpoint, provider, webSearch) {
+  if (provider === 'xai' && webSearch) {
+    return `${endpoint}/responses`;
+  }
+  return `${endpoint}/chat/completions`;
+}
+
+/**
+ * Build the JSON request body for the LLM API call.
+ * Adapts web search format per provider:
+ *   xAI:       Responses API with input[] and tools: [{type: "web_search"}]
+ *   Anthropic:  tools: [{type: "web_search_20250305", name: "web_search"}]
+ *   OpenAI:     web_search_options: {} (top-level parameter)
+ *   Generic:    no web search (format unknown)
+ * @param {Object} config - Storage configuration
+ * @param {Array} apiMessages - Formatted messages array
+ * @param {string} provider - Detected provider
+ * @returns {Object}
+ */
+function buildRequestBody(config, apiMessages, provider) {
+  const webSearch = !!config[STORAGE_KEYS.WEB_SEARCH];
+
+  // xAI web search uses the Responses API which has a different body format
+  if (provider === 'xai' && webSearch) {
+    return {
+      model: config[STORAGE_KEYS.MODEL],
+      input: apiMessages,
+      tools: [{ type: 'web_search' }],
+      temperature: 0.7
+    };
+  }
+
+  // Standard Chat Completions body (xAI without search, OpenAI, Anthropic, generic)
+  const body = {
+    model: config[STORAGE_KEYS.MODEL],
+    messages: apiMessages,
+    max_tokens: 512,
+    temperature: 0.7
+  };
+
+  if (webSearch) {
+    switch (provider) {
+      case 'anthropic':
+        body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
+        break;
+      case 'openai':
+        body.web_search_options = {};
+        break;
+      // generic: omit — unknown format would likely cause errors
+    }
+  }
+
+  return body;
+}
+
+/**
+ * Extract text content from an API response, accounting for provider-specific formats.
+ * xAI Responses API returns output[] with message items instead of choices[].
+ * @param {Object} data - Parsed JSON response
+ * @param {string} provider - Detected provider
+ * @param {boolean} webSearch - Whether web search is enabled
+ * @returns {string|null}
+ */
+function extractResponseContent(data, provider, webSearch) {
+  // xAI Responses API format
+  if (provider === 'xai' && webSearch) {
+    const output = data.output;
+    if (Array.isArray(output)) {
+      for (let i = output.length - 1; i >= 0; i--) {
+        const item = output[i];
+        if (item.type === 'message' && Array.isArray(item.content)) {
+          for (const part of item.content) {
+            if (part.type === 'output_text' && part.text) {
+              return part.text;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  // Standard Chat Completions format
+  return data.choices?.[0]?.message?.content || null;
+}
+
+/**
  * Send conversation to LLM and get response
  */
 async function handleLLMRequest({ messages, systemPrompt, summary, customization, imageData }) {
@@ -244,26 +357,22 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
     // Add recent literal messages (images are inline as [IMAGE: blob:...] format)
     apiMessages.push(...messages);
 
-    console.log('[Clanker] Sending API request to:', config[STORAGE_KEYS.API_ENDPOINT]);
+    const provider = detectProvider(config[STORAGE_KEYS.API_ENDPOINT]);
+    const webSearch = !!config[STORAGE_KEYS.WEB_SEARCH];
+    const apiUrl = getApiUrl(config[STORAGE_KEYS.API_ENDPOINT], provider, webSearch);
+
+    console.log('[Clanker] Sending API request to:', apiUrl, '(provider:', provider + ')');
     console.log('[Clanker] Using model:', config[STORAGE_KEYS.MODEL]);
     console.log('[Clanker] Total messages in request:', apiMessages.length);
 
-    const response = await fetch(
-      `${config[STORAGE_KEYS.API_ENDPOINT]}/chat/completions`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config[STORAGE_KEYS.API_KEY]}`
-        },
-        body: JSON.stringify({
-          model: config[STORAGE_KEYS.MODEL],
-          messages: apiMessages,
-          max_tokens: 512,
-          temperature: 0.7
-        })
-      }
-    );
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config[STORAGE_KEYS.API_KEY]}`
+      },
+      body: JSON.stringify(buildRequestBody(config, apiMessages, provider))
+    });
 
     console.log('[Clanker] API response status:', response.status);
 
@@ -277,7 +386,7 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
     }
 
     const data = await response.json();
-    const rawContent = data.choices?.[0]?.message?.content;
+    const rawContent = extractResponseContent(data, provider, webSearch);
     console.log('[Clanker] Raw LLM response:', rawContent);
 
     if (!rawContent) {

@@ -12,7 +12,8 @@ const STORAGE_KEYS = {
   MODEL: 'model',
   USER_NAME: 'userName',
   HISTORY_SIZE: 'historySize',
-  SIDEBAR_MODE: 'sidebarMode'
+  SIDEBAR_MODE: 'sidebarMode',
+  WEB_SEARCH: 'webSearch'
 };
 
 /**
@@ -26,6 +27,7 @@ const elements = {
   userName: document.getElementById('user-name'),
   historySize: document.getElementById('history-size'),
   sidebarMode: document.getElementById('sidebar-mode'),
+  webSearch: document.getElementById('web-search'),
   saveBtn: document.getElementById('save-btn'),
   testBtn: document.getElementById('test-btn'),
   statusBanner: document.getElementById('status-banner'),
@@ -57,6 +59,7 @@ async function loadSettings() {
     if (result[STORAGE_KEYS.SIDEBAR_MODE]) {
       elements.sidebarMode.value = result[STORAGE_KEYS.SIDEBAR_MODE];
     }
+    elements.webSearch.checked = !!result[STORAGE_KEYS.WEB_SEARCH];
 
     updateConnectionStatus();
   } catch (error) {
@@ -119,6 +122,7 @@ async function saveSettings(event) {
   const userName = elements.userName.value.trim();
   const historySize = parseInt(elements.historySize.value, 10) || 20;
   const sidebarMode = elements.sidebarMode.value;
+  const webSearch = elements.webSearch.checked;
 
   // Validate endpoint URL
   const validation = validateEndpoint(endpoint);
@@ -140,7 +144,8 @@ async function saveSettings(event) {
     [STORAGE_KEYS.MODEL]: model,
     [STORAGE_KEYS.USER_NAME]: userName,
     [STORAGE_KEYS.HISTORY_SIZE]: clampedHistorySize,
-    [STORAGE_KEYS.SIDEBAR_MODE]: sidebarMode
+    [STORAGE_KEYS.SIDEBAR_MODE]: sidebarMode,
+    [STORAGE_KEYS.WEB_SEARCH]: webSearch
   };
 
   try {

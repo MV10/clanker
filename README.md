@@ -32,7 +32,7 @@ The LLM can request a copy of images that are in the recent chat history. Video 
 
 The extension works best with the current conversation only. If you have it Available or Active in a conversation and switch to a different conversation, other people sending texts to the first one won't get any LLM responses until you switch back to that conversation.
 
-There is an "Inactive Conversation Response" that can temporarily switch to another conversation when a message arrives and let the LLM process it. This will interrupt you if you're actively using Messages. An alternative is "Respond when idle" which only does this after your foreground conversation has no activity for 10 minutes. It will track all the inactive conversations with new messages and process each of them. This lets Messages and the LLM work even after you walk away, at least until Messages decides it can't find your phone any more.
+There is an "Inactive Conversation Response" that can temporarily switch to another conversation when a message arrives and let the LLM process it. This will interrupt you if you're actively using Messages. An alternative is "Respond when idle" which only does this after your foreground conversation has no activity for 10 minutes. It will track all the inactive conversations with new messages and process each of them. This lets Messages and the LLM work even while you're away, at least for as long as Messages thinks it's connected to your phone.
 
 ## Comments, Troubleshooting, etc.
 
