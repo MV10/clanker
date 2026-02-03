@@ -29,7 +29,8 @@
     processedMessageIds: new Set(),
     lastMessageTime: 0,
     userTyping: false,
-    responseDelayMs: 3000,  // Wait before responding
+    responseDelayMinMs: 1500, // Minimum wait before responding
+    responseDelayMaxMs: 2000, // Maximum wait before responding
     pendingResponseTimer: null,
     pendingResponseMessageId: null,
     currentConversationId: null,

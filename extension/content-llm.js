@@ -66,7 +66,7 @@
       }
 
       await generateAndSendResponse(requestId);
-    }, state.responseDelayMs);
+    }, state.responseDelayMinMs + Math.random() * (state.responseDelayMaxMs - state.responseDelayMinMs));
 
     console.log('[Clanker] Scheduled response to message:', triggerMessage.id, '(request', requestId + ')');
   }
