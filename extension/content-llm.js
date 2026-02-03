@@ -130,6 +130,12 @@
         response = await handleImageRequest(response.requestImage, recentMessages, systemPrompt);
       }
 
+      // LLM API call is complete — clear in-flight flag before delivery.
+      // sendMessage may wait for the user to finish typing, and we must not
+      // block new requests (via the llmInFlight retry loop) during that wait.
+      state.llmInFlight = false;
+      if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
+
       // Check if this request was superseded while waiting for LLM
       if (requestId !== state.llmRequestId) {
         console.log('[Clanker] Request', requestId, 'superseded by', state.llmRequestId);
@@ -151,7 +157,7 @@
         // LLM can return null response if it decides not to reply
         if (response.content) {
           if (window.ClankerMain && window.ClankerMain.sendMessage) {
-            window.ClankerMain.sendMessage(`[clanker] ${response.content}`);
+            await window.ClankerMain.sendMessage(`[clanker] ${response.content}`);
           }
         } else {
           console.log('[Clanker] LLM chose not to respond');
@@ -178,9 +184,9 @@
         window.ClankerMain.showNotification('Unable to reach the AI service. Check your connection.', 'error');
       }
     } finally {
-      // Always clear in-flight flag
+      // Safety net — normally cleared above after the API call completes,
+      // but ensure it's cleared on early returns and exceptions too
       state.llmInFlight = false;
-      if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
     }
   }
 
