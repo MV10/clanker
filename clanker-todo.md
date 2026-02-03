@@ -1,7 +1,5 @@
 # Enhancements, Ideas, etc.
 
-* Instead of indexing conversations by participant name hash, just use Messages's built-in conversation ID 
- 
 * "Cannot recognize page structure" warning shows too soon when the page loads slowly. Detect page-load?
 
 * For long-running conversations, have the LLM generate and update notes about each participant, areas of interest, etc, and store these with conversation data, and send them with each request.

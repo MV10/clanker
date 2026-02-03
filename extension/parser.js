@@ -153,20 +153,14 @@ const ClankerParser = {
    * @returns {string}
    */
   detectConversationId() {
-    // Try to get conversation ID from URL
+    // Get conversation ID from URL (assigned by Google Messages)
     const urlMatch = window.location.href.match(/\/conversations\/([^/?#]+)/);
     if (urlMatch) {
       return urlMatch[1];
     }
 
-    // Fallback: hash sorted participant names for immutable identifier
-    const participants = this.extractParticipantNames();
-    if (participants.length === 0) {
-      return 'unknown';
-    }
-
-    const sorted = participants.sort().join('|');
-    return `participants-${this.hashString(sorted)}`;
+    // No conversation ID in URL means no active conversation
+    return null;
   },
 
   /**

@@ -236,7 +236,7 @@
 
       // Re-detect conversation and parse
       const conversationId = Parser.detectConversationId();
-      if (conversationId && conversationId !== 'unknown') {
+      if (conversationId) {
         state.currentConversationId = conversationId;
         if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
           window.ClankerMessages.parseExistingConversation();
