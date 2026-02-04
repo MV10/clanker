@@ -14,7 +14,12 @@ const STORAGE_KEYS = {
   USER_NAME: 'userName',
   HISTORY_SIZE: 'historySize',
   SIDEBAR_MODE: 'sidebarMode',
-  WEB_SEARCH: 'webSearch'
+  WEB_SEARCH: 'webSearch',
+  NEWS_SEARCH: 'newsSearch',
+  NEWS_MAX_SEARCHES: 'newsMaxSearches',
+  NEWS_QUIET_START: 'newsQuietStart',
+  NEWS_QUIET_STOP: 'newsQuietStop',
+  RELAXED_RESPONSIVENESS: 'relaxedResponsiveness'
 };
 
 /**
@@ -56,6 +61,7 @@ const MENU_IDS = {
   SEPARATOR2: 'clanker-separator2',
   DIAGNOSTICS: 'clanker-diagnostics',
   DIAG_LOG: 'clanker-diag-log',
+  DIAG_LOG_SANITIZED: 'clanker-diag-log-sanitized',
   DIAG_DEACTIVATE_ALL: 'clanker-diag-deactivate-all',
   DIAG_RESET_CONVERSATION: 'clanker-diag-reset-conversation',
   DIAG_RESET_ALL: 'clanker-diag-reset-all'
@@ -65,6 +71,11 @@ const MENU_IDS = {
  * Track current mode per tab
  */
 const tabModes = new Map();
+
+/**
+ * Track which tabs are viewing an automated-message conversation
+ */
+const tabAutomated = new Map();
 
 /**
  * Track which tabs have debugger attached
@@ -113,13 +124,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'SEND_CHAT_MESSAGE':
       // Send a chat message using main world injection
-      handleSendMessage(sender.tab?.id, message.text).then(sendResponse);
+      handleSendMessage(sender.tab?.id, message.text, message.typingParams || null).then(sendResponse);
       return true;
 
     case 'DETACH_DEBUGGER':
       // Content script requests debugger detach (after deactivation message sent)
       detachDebugger(sender.tab?.id).then(() => sendResponse({ success: true }));
       return true;
+
+    case 'SET_AUTOMATED':
+      // Content script reports whether current conversation is automated
+      if (sender.tab?.id) {
+        tabAutomated.set(sender.tab.id, !!message.automated);
+        updateContextMenuForTab(sender.tab.id);
+      }
+      sendResponse({ success: true });
+      return false;
 
     default:
       console.warn('Unknown message type:', message.type);
@@ -147,10 +167,8 @@ async function handleTestConnection({ endpoint, apiKey, model }) {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      return {
-        success: false,
-        error: errorData.error?.message || `HTTP ${response.status}`
-      };
+      const classified = classifyApiError(response.status, errorData);
+      return { success: false, error: classified.error };
     }
 
     return { success: true };
@@ -284,14 +302,74 @@ function extractResponseContent(data, provider, webSearch) {
 }
 
 /**
+ * Classify an API HTTP error into a category with a human-readable message.
+ * Categories: 'auth', 'quota', 'rate_limit', 'model', 'server', 'unknown'
+ * @param {number} status - HTTP status code
+ * @param {Object} errorData - Parsed error response body
+ * @returns {Object} {success: false, error: string, errorCategory: string}
+ */
+function classifyApiError(status, errorData) {
+  const apiMessage = errorData.error?.message || '';
+  const errorType = (errorData.error?.type || '').toLowerCase();
+  const errorCode = (errorData.error?.code || '').toLowerCase();
+
+  // Check for quota/billing indicators in the error body (providers vary)
+  const isQuotaError = /quota|billing|budget|insufficient.funds|exceeded.*limit|payment.*required/i.test(apiMessage) ||
+    /quota|billing|budget|insufficient/i.test(errorType) ||
+    /quota|billing|budget|insufficient/i.test(errorCode);
+
+  let category, message;
+
+  switch (status) {
+    case 401:
+      category = 'auth';
+      message = 'Invalid API key. Check your configuration.';
+      break;
+    case 402:
+      category = 'quota';
+      message = 'Payment required. Your API billing may need attention.';
+      break;
+    case 403:
+      category = isQuotaError ? 'quota' : 'auth';
+      message = isQuotaError
+        ? 'API quota exceeded. Check your billing or usage limits.'
+        : 'Access denied. Check your API key permissions.';
+      break;
+    case 404:
+      category = 'model';
+      message = 'Model or endpoint not found. Check your configuration.';
+      break;
+    case 429:
+      // 429 can be rate limit (transient) or quota exhaustion (persistent)
+      category = isQuotaError ? 'quota' : 'rate_limit';
+      message = isQuotaError
+        ? 'API quota exhausted. Check your billing or usage limits.'
+        : 'Rate limited. Too many requests — will retry automatically.';
+      break;
+    case 500:
+    case 502:
+    case 503:
+      category = 'server';
+      message = `API server error (${status}). This is usually temporary.`;
+      break;
+    default:
+      category = 'unknown';
+      message = apiMessage || `HTTP ${status}`;
+  }
+
+  return { success: false, error: message, errorCategory: category };
+}
+
+/**
  * Send conversation to LLM and get response
  */
-async function handleLLMRequest({ messages, systemPrompt, summary, customization, imageData }) {
+async function handleLLMRequest({ messages, systemPrompt, summary, customization, profiles, imageData }) {
   console.log('[Clanker] handleLLMRequest called:', {
     messageCount: messages?.length,
     hasSystemPrompt: !!systemPrompt,
     hasSummary: !!summary,
     hasCustomization: !!customization,
+    hasProfiles: !!profiles,
     hasImageData: !!imageData
   });
 
@@ -325,6 +403,14 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
       });
     }
 
+    // Add participant profiles if available
+    if (profiles && typeof profiles === 'object' && Object.keys(profiles).length > 0) {
+      apiMessages.push({
+        role: 'system',
+        content: `[PARTICIPANT PROFILES]\n${JSON.stringify(profiles)}`
+      });
+    }
+
     // Add conversation summary if available (provides context for older messages)
     if (summary) {
       apiMessages.push({
@@ -333,31 +419,35 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
       });
     }
 
+    const provider = detectProvider(config[STORAGE_KEYS.API_ENDPOINT]);
+
     // Add actual image data if this is a follow-up request with image
     if (imageData) {
-      // For vision-capable models, include as image content
-      apiMessages.push({
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `[IMAGE DATA for ${imageData.src} - ${imageData.width}x${imageData.height}]`
-          },
-          {
-            type: 'image_url',
-            image_url: {
-              url: imageData.dataUrl,
-              detail: 'high'
-            }
-          }
-        ]
-      });
+      // Format varies by provider
+      const imageLabel = `[IMAGE DATA for ${imageData.src} - ${imageData.width}x${imageData.height}]`;
+      if (provider === 'xai') {
+        // xAI uses input_text/input_image with flat image_url string
+        apiMessages.push({
+          role: 'user',
+          content: [
+            { type: 'input_text', text: imageLabel },
+            { type: 'input_image', image_url: imageData.dataUrl, detail: 'high' }
+          ]
+        });
+      } else {
+        // OpenAI / Anthropic / generic use text/image_url with nested object
+        apiMessages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: imageLabel },
+            { type: 'image_url', image_url: { url: imageData.dataUrl, detail: 'high' } }
+          ]
+        });
+      }
     }
 
     // Add recent literal messages (images are inline as [IMAGE: blob:...] format)
     apiMessages.push(...messages);
-
-    const provider = detectProvider(config[STORAGE_KEYS.API_ENDPOINT]);
     const webSearch = !!config[STORAGE_KEYS.WEB_SEARCH];
     const apiUrl = getApiUrl(config[STORAGE_KEYS.API_ENDPOINT], provider, webSearch);
 
@@ -379,10 +469,7 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       console.error('[Clanker] API error:', errorData);
-      return {
-        success: false,
-        error: errorData.error?.message || `HTTP ${response.status}`
-      };
+      return classifyApiError(response.status, errorData);
     }
 
     const data = await response.json();
@@ -401,14 +488,15 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
       content: parsed.response,
       summary: parsed.summary || null,
       requestImage: parsed.requestImage || null,
-      customization: parsed.customization
+      customization: parsed.customization,
+      profiles: parsed.profiles
     };
   } catch (error) {
     // Provide more specific error messages for common failures
     if (error.name === 'TypeError' && error.message.includes('fetch')) {
-      return { success: false, error: 'Network error - check your connection' };
+      return { success: false, error: 'Network error — check your connection.', errorCategory: 'network' };
     }
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, errorCategory: 'unknown' };
   }
 }
 
@@ -438,14 +526,16 @@ function parseLLMResponse(content) {
     const hasRequestImage = typeof parsed.requestImage === 'string';
     const hasSummary = typeof parsed.summary === 'string';
     const hasCustomization = 'customization' in parsed;
+    const hasProfiles = 'profiles' in parsed && typeof parsed.profiles === 'object';
 
     // Accept if it has any of the expected fields
-    if (hasResponse || hasRequestImage || hasSummary || hasCustomization) {
+    if (hasResponse || hasRequestImage || hasSummary || hasCustomization || hasProfiles) {
       return {
         response: hasResponse ? parsed.response : null,
         summary: hasSummary ? parsed.summary : null,
         requestImage: hasRequestImage ? parsed.requestImage : null,
-        customization: hasCustomization ? parsed.customization : undefined
+        customization: hasCustomization ? parsed.customization : undefined,
+        profiles: hasProfiles ? parsed.profiles : undefined
       };
     }
   } catch (e) {
@@ -487,21 +577,34 @@ async function handleClickElement(tabId, elementId) {
 
 /**
  * Send a message by setting textarea value and clicking send - all in main world
+ * @param {number} tabId
+ * @param {string} text
+ * @param {Object|null} typingParams - If provided, simulate per-character typing
+ *   { prefixLength: number, perCharDelayMs: number }
  */
-async function handleSendMessage(tabId, text) {
+async function handleSendMessage(tabId, text, typingParams) {
   if (!tabId || !text) {
     return { success: false, error: 'Missing tab ID or text' };
   }
 
   try {
     // Step 1: Set the textarea value using execCommand to simulate real typing
-    await chrome.scripting.executeScript({
+    // The MAIN world script checks for user content before clearing
+    const [result] = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: (messageText) => {
+      func: (messageText, tp) => {
         const textarea = document.querySelector('[data-e2e-message-input-box]');
         if (!textarea) {
-          return false;
+          return { success: false, error: 'no_textarea' };
+        }
+
+        // Check for user content before clearing
+        const existingContent = textarea.value || textarea.textContent || '';
+        const trimmed = existingContent.trim();
+        const isUIText = /^(SMS|RCS)(\s+(SMS|RCS))*$/i.test(trimmed);
+        if (trimmed.length > 0 && !isUIText) {
+          return { success: false, error: 'user_typing' };
         }
 
         // Focus the textarea
@@ -511,7 +614,20 @@ async function handleSendMessage(tabId, text) {
         textarea.select();
         document.execCommand('delete', false, null);
 
-        // Insert new text using execCommand (simulates actual typing)
+        if (tp) {
+          // Typing simulation: insert prefix immediately, then type rest char-by-char
+          const prefix = messageText.substring(0, tp.prefixLength);
+          const rest = messageText.substring(tp.prefixLength);
+
+          if (prefix) {
+            document.execCommand('insertText', false, prefix);
+          }
+
+          // Return the rest to type char-by-char asynchronously
+          return { success: true, typingRest: rest, perCharDelayMs: tp.perCharDelayMs, jitterMinMs: tp.jitterMinMs || 0, jitterMaxMs: tp.jitterMaxMs || 0 };
+        }
+
+        // No typing simulation: insert all at once
         const inserted = document.execCommand('insertText', false, messageText);
 
         if (!inserted) {
@@ -525,10 +641,42 @@ async function handleSendMessage(tabId, text) {
         textarea.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
         textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
 
-        return true;
+        return { success: true };
       },
-      args: [text]
+      args: [text, typingParams || null]
     });
+
+    const scriptResult = result?.result;
+
+    if (!scriptResult || !scriptResult.success) {
+      const err = scriptResult?.error || 'unknown';
+      return { success: false, error: err };
+    }
+
+    // If typing simulation was requested, run async char-by-char loop
+    if (scriptResult.typingRest !== undefined) {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: async (restText, delayMs, jitterMin, jitterMax) => {
+          const textarea = document.querySelector('[data-e2e-message-input-box]');
+          if (!textarea) return;
+
+          for (let i = 0; i < restText.length; i++) {
+            const jitter = jitterMin + Math.random() * (jitterMax - jitterMin);
+            await new Promise(r => setTimeout(r, delayMs + jitter));
+            textarea.focus();
+            document.execCommand('insertText', false, restText[i]);
+          }
+
+          // Dispatch events once at end
+          textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+          textarea.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+          textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        },
+        args: [scriptResult.typingRest, scriptResult.perCharDelayMs, scriptResult.jitterMinMs, scriptResult.jitterMaxMs]
+      });
+    }
 
     // Step 2: Brief wait for Angular to process
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -601,7 +749,13 @@ async function handleGetConfig() {
                         config[STORAGE_KEYS.MODEL]),
         userName: config[STORAGE_KEYS.USER_NAME] || null,
         historySize: config[STORAGE_KEYS.HISTORY_SIZE] || 20,
-        sidebarMode: config[STORAGE_KEYS.SIDEBAR_MODE] || 'ignore'
+        sidebarMode: config[STORAGE_KEYS.SIDEBAR_MODE] || 'ignore',
+        newsSearch: !!config[STORAGE_KEYS.NEWS_SEARCH],
+        newsMaxSearches: config[STORAGE_KEYS.NEWS_MAX_SEARCHES] || 10,
+        newsQuietStart: config[STORAGE_KEYS.NEWS_QUIET_START] ?? 21,
+        newsQuietStop: config[STORAGE_KEYS.NEWS_QUIET_STOP] ?? 9,
+        relaxedResponsiveness: config[STORAGE_KEYS.RELAXED_RESPONSIVENESS] !== undefined
+          ? !!config[STORAGE_KEYS.RELAXED_RESPONSIVENESS] : true
       }
     };
   } catch (error) {
@@ -767,6 +921,9 @@ async function handleDiagLog(tabId) {
   <h2>Stored Customization</h2>
   <pre>${response.storedCustomization ? escapeHtml(response.storedCustomization) : '<span class="null">null</span>'}</pre>
 
+  <h2>Stored Profiles</h2>
+  <pre>${response.storedProfiles ? escapeHtml(JSON.stringify(response.storedProfiles, null, 2)) : '<span class="null">null</span>'}</pre>
+
   <h2>Recent Messages (last 20)</h2>
   <p><em>Note: Images are included in sequence with type "image" or "text+image"</em></p>
   <pre>${escapeHtml(JSON.stringify(response.recentMessages, null, 2))}</pre>
@@ -783,6 +940,69 @@ async function handleDiagLog(tabId) {
 }
 
 /**
+ * Show conversation state with sensitive data redacted for safe public sharing
+ */
+async function handleDiagLogSanitized(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_DIAGNOSTIC_STATE' });
+
+    if (!response?.success) {
+      console.error('[Clanker] Failed to get diagnostic state:', response?.error);
+      return;
+    }
+
+    const sanitized = sanitizeDiagnosticState(response);
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Clanker Diagnostic - Conversation State (Sanitized)</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+    h1 { color: #569cd6; }
+    h2 { color: #4ec9b0; margin-top: 30px; }
+    pre { background: #2d2d2d; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
+    .section { margin-bottom: 20px; }
+    .label { color: #9cdcfe; }
+    .value { color: #ce9178; }
+    .null { color: #808080; font-style: italic; }
+    .notice { background: #3a3d41; border-left: 4px solid #569cd6; padding: 10px 15px; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Clanker Diagnostic - Conversation State (Sanitized)</h1>
+  <p>Generated: ${new Date().toISOString()}</p>
+  <div class="notice">Participant names, message content, IDs, URLs, and other sensitive data have been redacted. This output is safe to share publicly for support purposes.</div>
+
+  <h2>Runtime State</h2>
+  <pre>${escapeHtml(JSON.stringify(sanitized.runtimeState, null, 2))}</pre>
+
+  <h2>Stored Mode</h2>
+  <pre>${escapeHtml(JSON.stringify(sanitized.storedMode, null, 2))}</pre>
+
+  <h2>Stored Summary</h2>
+  <pre>${sanitized.storedSummary ? escapeHtml(sanitized.storedSummary) : '<span class="null">null</span>'}</pre>
+
+  <h2>Stored Customization</h2>
+  <pre>${sanitized.storedCustomization ? escapeHtml(sanitized.storedCustomization) : '<span class="null">null</span>'}</pre>
+
+  <h2>Stored Profiles</h2>
+  <pre>${sanitized.storedProfiles ? escapeHtml(JSON.stringify(sanitized.storedProfiles, null, 2)) : '<span class="null">null</span>'}</pre>
+
+  <h2>Recent Messages (last 20)</h2>
+  <pre>${escapeHtml(JSON.stringify(sanitized.recentMessages, null, 2))}</pre>
+</body>
+</html>`;
+
+    const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+    chrome.tabs.create({ url: dataUrl });
+
+  } catch (error) {
+    console.error('[Clanker] Sanitized diagnostic log error:', error);
+  }
+}
+
+/**
  * Escape HTML for safe display
  */
 function escapeHtml(text) {
@@ -793,6 +1013,151 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+/**
+ * Sanitize diagnostic state data for safe public sharing.
+ * Builds a consistent name mapping and applies it across all fields.
+ */
+function sanitizeDiagnosticState(data) {
+  const nameMap = new Map();
+  let userCounter = 0;
+  let phoneCounter = 0;
+
+  function getRedactedName(name) {
+    if (!name) return name;
+    if (name === 'You') return name; // Already anonymous, skip
+    if (nameMap.has(name)) return nameMap.get(name);
+
+    let redacted;
+    if (/^\d{1,10}$/.test(name)) {
+      phoneCounter++;
+      redacted = `(${String(phoneCounter).padStart(3, '0')}) XXX-XXXX`;
+    } else {
+      userCounter++;
+      redacted = `User${String(userCounter).padStart(3, '0')}`;
+    }
+    nameMap.set(name, redacted);
+    return redacted;
+  }
+
+  function redactText(text) {
+    if (!text || typeof text !== 'string') return text;
+    let result = text;
+    // Replace participant names in text (longer names first to avoid partial matches).
+    // Case-insensitive to catch informal casing in messages and summaries.
+    const sortedNames = [...nameMap.entries()].sort((a, b) => b[0].length - a[0].length);
+    for (const [original, redacted] of sortedNames) {
+      const escaped = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      result = result.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), redacted);
+    }
+    // Redact blob URIs: blob:https://.../<guid> → blob:https://redacted.com/XXXX
+    result = result.replace(/blob:https?:\/\/[^/]+\/[a-f0-9-]+/gi, 'blob:https://redacted.com/XXXX');
+    // Redact URLs with domains: https://domain.com/... → https://redacted.com/...
+    result = result.replace(/(https?:\/\/)([^/\s]+)/g, '$1redacted.com');
+    return result;
+  }
+
+  // First pass: collect ALL participant names before any redaction.
+  // This ensures redactText has the complete nameMap when replacing names in text.
+
+  // Header names, parsed participants, and LLM-view names from the conversation
+  if (data.allParticipantNames) {
+    for (const name of data.allParticipantNames) {
+      if (name) getRedactedName(name);
+    }
+  }
+
+  // Configured user name (what the LLM uses in summaries instead of "You")
+  if (data.configuredUserName) {
+    getRedactedName(data.configuredUserName);
+  }
+
+  // Message senders (may include names not in header, e.g. "You")
+  if (data.recentMessages) {
+    for (const msg of data.recentMessages) {
+      if (msg.sender) getRedactedName(msg.sender);
+    }
+  }
+  if (data.runtimeState?.lastProcessedMessage?.sender) {
+    getRedactedName(data.runtimeState.lastProcessedMessage.sender);
+  }
+  if (data.storedLastMessage?.sender) {
+    getRedactedName(data.storedLastMessage.sender);
+  }
+
+  // For multi-word names (e.g. "Josh Smith"), also register individual words
+  // so abbreviations or first-name-only references in summaries get redacted.
+  // Each sub-word maps to the same redacted label as the full name.
+  for (const [fullName, redacted] of [...nameMap.entries()]) {
+    const words = fullName.split(/\s+/).filter(w => w.length >= 2);
+    if (words.length > 1) {
+      for (const word of words) {
+        if (!nameMap.has(word)) {
+          nameMap.set(word, redacted);
+        }
+      }
+    }
+  }
+
+  // Deep clone to avoid modifying originals
+  const sanitized = JSON.parse(JSON.stringify(data));
+
+  // Sanitize runtimeState
+  if (sanitized.runtimeState) {
+    if (sanitized.runtimeState.conversationId) {
+      sanitized.runtimeState.conversationId = 'REDACTED';
+    }
+    if (sanitized.runtimeState.lastProcessedMessage) {
+      const lpm = sanitized.runtimeState.lastProcessedMessage;
+      if (lpm.sender) lpm.sender = getRedactedName(lpm.sender);
+      if (lpm.content) lpm.content = redactText(lpm.content);
+      if (lpm.id) lpm.id = 'REDACTED';
+    }
+  }
+
+  // Sanitize storedLastMessage
+  if (sanitized.storedLastMessage) {
+    const slm = sanitized.storedLastMessage;
+    if (slm.sender) slm.sender = getRedactedName(slm.sender);
+    if (slm.content) slm.content = redactText(slm.content);
+    if (slm.id) slm.id = 'REDACTED';
+  }
+
+  // Sanitize summary, customization, and profiles
+  if (sanitized.storedSummary) {
+    sanitized.storedSummary = redactText(sanitized.storedSummary);
+  }
+  if (sanitized.storedCustomization) {
+    sanitized.storedCustomization = redactText(sanitized.storedCustomization);
+  }
+  if (sanitized.storedProfiles && typeof sanitized.storedProfiles === 'object') {
+    const redactedProfiles = {};
+    for (const [name, notes] of Object.entries(sanitized.storedProfiles)) {
+      const redactedName = getRedactedName(name);
+      redactedProfiles[redactedName] = typeof notes === 'string' ? redactText(notes) : notes;
+    }
+    sanitized.storedProfiles = redactedProfiles;
+  }
+
+  // Sanitize recent messages
+  if (sanitized.recentMessages) {
+    for (const msg of sanitized.recentMessages) {
+      if (msg.sender) msg.sender = getRedactedName(msg.sender);
+      if (msg.content) msg.content = redactText(msg.content);
+      if (msg.id) msg.id = 'REDACTED';
+      if (msg.imageSrc) {
+        msg.imageSrc = msg.imageSrc.replace(/blob:https?:\/\/[^/]+\/[a-f0-9-]+/gi,
+          'blob:https://redacted.com/XXXX');
+      }
+    }
+  }
+
+  // Remove metadata fields that were only needed for building nameMap
+  delete sanitized.allParticipantNames;
+  delete sanitized.configuredUserName;
+
+  return sanitized;
 }
 
 /**
@@ -983,6 +1348,15 @@ function createContextMenu() {
       documentUrlPatterns: ['https://messages.google.com/*']
     });
 
+    // Diagnostic: Show conversation state (sanitized for sharing)
+    chrome.contextMenus.create({
+      id: MENU_IDS.DIAG_LOG_SANITIZED,
+      parentId: MENU_IDS.DIAGNOSTICS,
+      title: 'Show Conversation State (Sanitized)',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://messages.google.com/*']
+    });
+
     // Diagnostic: Deactivate in all conversations
     chrome.contextMenus.create({
       id: MENU_IDS.DIAG_DEACTIVATE_ALL,
@@ -1035,22 +1409,38 @@ async function updateToolbarIcon(tabId, mode) {
  */
 async function updateContextMenuForTab(tabId) {
   const { mode } = await handleGetMode(tabId);
+  const isAutomated = tabAutomated.get(tabId) || false;
 
   // If uninitialized, disable mode options
   const enabled = mode !== MODES.UNINITIALIZED;
 
+  // In automated-message conversations, hide everything except Settings
+  const showNonSettings = !isAutomated;
+
   try {
     await chrome.contextMenus.update(MENU_IDS.MODE_DEACTIVATED, {
       checked: mode === MODES.DEACTIVATED || mode === MODES.UNINITIALIZED,
-      enabled
+      enabled,
+      visible: showNonSettings
     });
     await chrome.contextMenus.update(MENU_IDS.MODE_AVAILABLE, {
       checked: mode === MODES.AVAILABLE,
-      enabled
+      enabled,
+      visible: showNonSettings
     });
     await chrome.contextMenus.update(MENU_IDS.MODE_ACTIVE, {
       checked: mode === MODES.ACTIVE,
-      enabled
+      enabled,
+      visible: showNonSettings
+    });
+    await chrome.contextMenus.update(MENU_IDS.SEPARATOR, {
+      visible: showNonSettings
+    });
+    await chrome.contextMenus.update(MENU_IDS.SEPARATOR2, {
+      visible: showNonSettings
+    });
+    await chrome.contextMenus.update(MENU_IDS.DIAGNOSTICS, {
+      visible: showNonSettings
     });
   } catch (e) {
     // Menu might not exist yet
@@ -1086,6 +1476,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     case MENU_IDS.DIAG_LOG:
       // Show conversation state in a new tab
       handleDiagLog(tab.id);
+      break;
+
+    case MENU_IDS.DIAG_LOG_SANITIZED:
+      // Show sanitized conversation state for safe public sharing
+      handleDiagLogSanitized(tab.id);
       break;
 
     case MENU_IDS.DIAG_DEACTIVATE_ALL:
@@ -1124,6 +1519,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 // noinspection JSDeprecatedSymbols
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabModes.delete(tabId);
+  tabAutomated.delete(tabId);
   debuggerAttached.delete(tabId); // Debugger auto-detaches on tab close
 });
 

@@ -114,6 +114,9 @@ const ClankerPatterns = {
   // Pattern to detect when Clanker is mentioned (for Available mode)
   // Matches both "clanker" and "clank"
   CLANKER_MENTION: /clank(er)?/i,
+
+  // Automated message conversations have a participant name that is a digits-only number (1-10 digits)
+  AUTOMATED_PARTICIPANT: /^\d{1,10}$/,
 };
 
 /**
@@ -121,7 +124,7 @@ const ClankerPatterns = {
  */
 const ClankerParser = {
   /**
-   * Verify that the expected page structure exists
+   * Verify that the expected page structure exists (useful for diagnostics)
    * @returns {{valid: boolean, hasActiveConversation: boolean, details: Object}}
    */
   verifyPageStructure() {
@@ -528,6 +531,21 @@ const ClankerParser = {
   },
 
   /**
+   * Check if a participant set contains an automated-message participant
+   * (identified by a name that is a digits-only number of 1-10 digits)
+   * @param {Set<string>|string[]} participants
+   * @returns {boolean}
+   */
+  hasAutomatedParticipant(participants) {
+    for (const name of participants) {
+      if (ClankerPatterns.AUTOMATED_PARTICIPANT.test(name)) {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  /**
    * Get input field element
    * @returns {Element|null}
    */
@@ -552,7 +570,8 @@ const ClankerParser = {
     return !!(
       document.querySelector(ClankerSelectors.CONVERSATION_CONTAINER) ||
       document.querySelector(ClankerSelectors.CONVERSATION_THREAD) ||
-      document.querySelector(ClankerSelectors.MESSAGE_WRAPPER)
+      document.querySelector(ClankerSelectors.MESSAGE_WRAPPER) ||
+      document.querySelector(ClankerSelectors.SIDEBAR_ITEM)
     );
   },
 };

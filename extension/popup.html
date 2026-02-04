@@ -52,6 +52,29 @@
           <input type="checkbox" id="web-search" name="webSearch">
           Allow web searches (probably not free)
         </label>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="relaxed-responsiveness" name="relaxedResponsiveness" checked>
+          Relaxed responsiveness (recommended)
+        </label>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="news-search" name="newsSearch">
+          Allow idle-time news searches (hourly)
+        </label>
+
+        <label for="news-max-searches">Maximum news site searches (1 to 100)</label>
+        <input type="number" id="news-max-searches" name="newsMaxSearches"
+               min="1" max="100" placeholder="10">
+
+        <label>Quiet hours start/stop (24hrs)</label>
+        <div class="inline-inputs">
+          <input type="number" id="news-quiet-start" name="newsQuietStart"
+                 min="0" max="23" placeholder="21">
+          <span class="inline-separator">to</span>
+          <input type="number" id="news-quiet-stop" name="newsQuietStop"
+                 min="0" max="23" placeholder="9">
+        </div>
       </fieldset>
 
       <div class="button-group">

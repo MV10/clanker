@@ -186,3 +186,124 @@ button:disabled {
   font-size: 13px;
   color: #666;
 }
+
+select,
+input[type="number"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  background: #fff;
+  color: #333;
+}
+
+.inline-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-inputs input[type="number"] {
+  flex: 1;
+}
+
+.inline-separator {
+  color: #666;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #d4d4d4;
+    background: #1e1e1e;
+  }
+
+  h1 {
+    color: #6eaaef;
+  }
+
+  .subtitle {
+    color: #999;
+  }
+
+  h2 {
+    color: #d4d4d4;
+  }
+
+  fieldset {
+    border-color: #444;
+    background: #2a2a2a;
+  }
+
+  legend {
+    color: #bbb;
+  }
+
+  label {
+    color: #bbb;
+  }
+
+  input[type="text"],
+  input[type="password"],
+  input[type="url"],
+  input[type="number"],
+  select {
+    background: #333;
+    color: #d4d4d4;
+    border-color: #555;
+  }
+
+  input:focus,
+  select:focus {
+    border-color: #6eaaef;
+    box-shadow: 0 0 0 2px rgba(110, 170, 239, 0.3);
+  }
+
+  #save-btn {
+    background: #4a8fe7;
+  }
+
+  #save-btn:hover {
+    background: #3a7ad4;
+  }
+
+  #test-btn {
+    background: #3a3a3a;
+    color: #d4d4d4;
+  }
+
+  #test-btn:hover {
+    background: #4a4a4a;
+  }
+
+  .status-banner.success {
+    background: #1a3a25;
+    color: #6ec98f;
+    border-color: #2a5a3a;
+  }
+
+  .status-banner.error {
+    background: #3a1a1a;
+    color: #e87070;
+    border-color: #5a2a2a;
+  }
+
+  .status-section {
+    background: #2a2a2a;
+    border-color: #444;
+  }
+
+  .status-indicator .dot {
+    background: #666;
+  }
+
+  .status-indicator .text {
+    color: #999;
+  }
+
+  .inline-separator {
+    color: #999;
+  }
+}

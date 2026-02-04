@@ -9,6 +9,7 @@
   'use strict';
 
   const SidebarParser = window.ClankerSidebarParser;
+  const ClankerPatterns = window.ClankerPatterns;
   const Storage = window.ClankerStorage;
   const { state, MODES } = window.ClankerState;
 
@@ -145,6 +146,10 @@
       // Skip conversation currently being processed by sidebar
       if (conversationId === state.sidebar.currentlyProcessingId) continue;
 
+      // Skip automated-message conversations (participant name is a digits-only number)
+      const conversationName = SidebarParser.getConversationName(item);
+      if (ClankerPatterns.AUTOMATED_PARTICIPANT.test(conversationName)) continue;
+
       const snippetText = SidebarParser.getSnippetText(item);
       const previousSnippet = state.sidebar.pendingSnippets.get(conversationId);
 
@@ -279,9 +284,18 @@
     availabilityCheckTimer = setInterval(() => {
       elapsed += interval;
 
-      if (state.sidebar.mode === 'ignore' || state.sidebar.todoQueue.length === 0 || elapsed >= timeout) {
+      if (state.sidebar.mode === 'ignore' || state.sidebar.todoQueue.length === 0) {
         clearInterval(availabilityCheckTimer);
         availabilityCheckTimer = null;
+        return;
+      }
+
+      if (elapsed >= timeout) {
+        // Timed out — clear timer but re-attempt later instead of losing queued items
+        clearInterval(availabilityCheckTimer);
+        availabilityCheckTimer = null;
+        console.log('[Clanker:Sidebar] Availability check timed out, will retry in 30s');
+        setTimeout(attemptProcessing, 30000);
         return;
       }
 

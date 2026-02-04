@@ -1,7 +1,7 @@
 # Overview
 * Refer to the local README.md for a high level description.
 * The extension is restricted to processing pages from messages.google.com
-* Process conversational text and still-image attachments 
+* Processes conversational text and still-image attachments 
 * During ongoing conversations, only process new comments, do not re-parse the entire page on each update
 * LLM replies must be prefixed with "[clanker]" so human users know it is LLM output
 * The LLM will use the local user's input field and send button to participate in the conversation
@@ -69,7 +69,6 @@
 * Warn the local user if extension configuration items are missing (Uninitialized mode)
 * Warn the local user if the LLM can't recognize the page structure, then stop processing the page
 * Only the active conversation should be processed
-* Disregard the sidebar listing other conversations
 * Disregard the page header, menus, user menu, and so on
 * Evaluate the page content and find the active conversation region
 * Review the available conversation history and catalog all participants
@@ -103,8 +102,39 @@ When returning to a conversation, detect and handle messages that arrived while 
 * In Active mode: LLM is consulted for ALL new human messages; LLM decides whether to respond (can return null)
 * In Available mode: LLM is only invoked when "clanker" is mentioned
 * If the local user is already typing a message, the LLM should not respond
-* Humans are slow; before responding, wait a few seconds to give the local user a chance to start typing
+* Humans are slow; before responding, wait before replying to give the local user a chance to start typing
 * If a new message arrives while a response is pending, cancel the pending response and evaluate the new message instead (debouncing)
+
+## Relaxed Responsiveness
+
+A "Relaxed responsiveness" checkbox (on by default) enables human-like reading delays and typing simulation.
+
+### Reading Delay
+When relaxed mode is on, the response delay is based on message content rather than a flat timer:
+* Text messages: delay scales with character count at a simulated reading speed of 18-23 characters/second
+* Image messages: 500-1000ms additional delay
+* Minimum floor of 800ms
+* When multiple messages arrive in rapid succession, the reading delay extends (adds time for each new message) rather than resetting — the same response closure is reused
+
+When relaxed mode is off, the original flat 1.5-2 second random delay is used.
+
+### Typing Simulation
+After the LLM responds, the message is typed character-by-character into the input field:
+* The `[clanker]` prefix is inserted immediately
+* Remaining characters are inserted one at a time via `execCommand('insertText')`
+* Base typing speed is configurable (currently 350-450 cps in content-llm.js)
+* Each character has a randomized jitter delay added on top (currently 1-150ms)
+* Total typing time is capped at 8 seconds
+* Typing simulation is skipped when the per-character delay would be under 0.5ms
+
+### User-Typing Protection
+A race condition existed where the MAIN world script could overwrite user input that started after `waitForInputClear` passed but before the script executed. This is fixed by:
+* The MAIN world script checks the textarea content before clearing; if non-empty and not UI text (SMS/RCS labels), it returns a `user_typing` error instead of destroying the input
+* `sendMessage` retries up to 5 times with 1-second delays on `user_typing` errors
+
+### Sidebar Exceptions
+* Sidebar "process" mode: all delays and typing simulation are skipped (instant response)
+* Sidebar "idle" mode: reading delays and typing simulation apply normally when relaxed mode is on
 * Images in the conversation are included inline in the message history as [IMAGE: blob:...] references
 
 ## Concurrency Control
@@ -250,9 +280,9 @@ The extension operates in one of four modes, controlled via a browser context me
 ## Mode Transition Messages
 When modes change, the extension inserts a message to inform conversation participants:
 
-* **Any → Available**: Extension inserts "[clanker] AI is available but will only reply if you address it directly by name."
-* **Any → Active**: LLM generates a brief activation message (e.g., "Hey everyone, I'm here!")
-* **Any → Deactivated**: Extension inserts "[clanker] The AI has been deactivated for this conversation."
+* **Any >> Available**: Extension inserts "[clanker] AI is available but will only reply if you address it directly by name."
+* **Any >> Active**: LLM generates a brief activation message (e.g., "Hey everyone, I'm here!")
+* **Any >> Deactivated**: Extension inserts "[clanker] The AI has been deactivated for this conversation."
 
 The LLM-generated activation message receives context about the conversation and a one-time instruction to announce its presence briefly and casually.
 
@@ -269,6 +299,7 @@ The LLM-generated activation message receives context about the conversation and
 * `model` - LLM model identifier
 * `userName` - Local user's display name (replaces "You" in LLM context)
 * `historySize` - Number of recent messages to send literally (10-500, default 20)
+* `relaxedResponsiveness` - Enable human-like reading/typing delays (boolean, default true)
 
 ### Per-Conversation Data
 * `mode_{conversationId}` - Operating mode for the conversation
@@ -328,9 +359,9 @@ Each conversation in the sidebar is an anchor element:
 ## Conversation Evaluation
 
 When a snippet change is detected, the conversation is evaluated against its stored mode:
-* No stored mode or Deactivated mode — skip (never process conversations the user hasn't activated)
-* Available mode — only process if the snippet text mentions Clanker
-* Active mode — always process
+* No stored mode or Deactivated mode -- skip (never process conversations the user hasn't activated)
+* Available mode -- only process if the snippet text mentions Clanker
+* Active mode -- always process
 * Conversations that pass evaluation are added to the todo queue (if not already present)
 
 ## Processing Orchestration
@@ -347,7 +378,7 @@ When a snippet change is detected, the conversation is evaluated against its sto
 2. Display a banner: "Clanker is processing an inactive conversation, please wait..."
 3. Find the sidebar anchor for the target conversation and click it
 4. Wait for the conversation change to be confirmed (poll `state.currentConversationId`, 200ms interval, 10s timeout)
-5. The existing conversation-change pipeline handles loading: `handleConversationChange` → `parseExistingConversation` → mode restore → message processing → LLM invocation
+5. The existing conversation-change pipeline handles loading: `handleConversationChange` >> `parseExistingConversation` >> mode restore >> message processing >> LLM invocation
 6. Wait for the pipeline to complete: `parseComplete` is true, no LLM in flight, no pending response timer, plus a 1-second settle period for sent messages to appear in the DOM (polled at 500ms, 60s safety timeout)
 7. Process the next conversation in the queue, or return to the foreground
 
@@ -369,9 +400,9 @@ If the user manually changes the conversation while sidebar processing is in pro
 ## Activity Tracking Integration
 
 Multiple modules feed into the sidebar activity timestamp:
-* **content-observers.js** — URL changes, history events, input field mutations
-* **content-messages.js** — New messages processed
-* **content-llm.js** — LLM requests started and completed
+* **content-observers.js** -- URL changes, history events, input field mutations
+* **content-messages.js** -- New messages processed
+* **content-llm.js** -- LLM requests started and completed
 
 This timestamp is used by idle mode to determine when 10 minutes of inactivity have elapsed.
 

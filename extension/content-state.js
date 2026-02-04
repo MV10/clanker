@@ -26,6 +26,7 @@
     conversation: null,     // Current ConversationContext from parser
     conversationSummary: null, // LLM-generated summary of older messages
     conversationCustomization: null, // LLM-managed persona/style customization
+    conversationProfiles: null,      // LLM-managed participant profiles (JSON object keyed by name)
     processedMessageIds: new Set(),
     lastMessageTime: 0,
     userTyping: false,
@@ -33,6 +34,9 @@
     responseDelayMaxMs: 2000, // Maximum wait before responding
     pendingResponseTimer: null,
     pendingResponseMessageId: null,
+    pendingAttemptResponse: null,  // Stored closure for rescheduling on delay extension
+    responseTargetTime: 0,         // Timestamp when pending response should fire
+    apiRequestStartTime: 0,        // When SEND_TO_LLM was called (for typing delay calc)
     currentConversationId: null,
     config: null,
     // Concurrency control for LLM requests
@@ -46,6 +50,11 @@
     lastProcessedMessage: null,
     // Deferred LLM response (stored when conversation changes mid-request)
     deferredResponse: null,
+    // Consecutive LLM error tracking (to avoid spamming notifications)
+    consecutiveErrors: 0,
+    // Idle-time news search timer
+    newsCheckTimer: null,
+    lastNewsCheckTime: 0,
     // Sidebar conversation monitoring
     sidebar: {
       mode: 'ignore',

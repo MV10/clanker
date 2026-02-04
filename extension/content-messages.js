@@ -76,8 +76,25 @@
    * Parse existing conversation history
    */
   function parseExistingConversation(retryCount = 0) {
+    // Own the parseComplete flag — stays false until we're truly done
+    state.parseComplete = false;
+
     // Use parser to get full conversation context
     state.conversation = Parser.parseConversation();
+
+    // Check for automated-message conversations (participant is a digits-only number, 1-10 digits).
+    // Use header names first (available before messages load), fall back to parsed participants.
+    const headerNames = Parser.extractParticipantNames();
+    console.log('[Clanker] A2P check — headerNames:', JSON.stringify(headerNames),
+      'participants:', JSON.stringify([...state.conversation.participants]));
+    if (Parser.hasAutomatedParticipant(headerNames) ||
+        Parser.hasAutomatedParticipant(state.conversation.participants)) {
+      console.log('[Clanker] Automated-message conversation detected, ignoring');
+      state.conversation = null;
+      state.parseComplete = true;
+      chrome.runtime.sendMessage({ type: 'SET_AUTOMATED', automated: true }).catch(() => {});
+      return;
+    }
 
     // If no messages found and we haven't retried too many times, try again
     // Large conversations may take several seconds to load from the user's phone
@@ -100,6 +117,7 @@
     if (state.conversation.participants.size > 0) {
       console.log('[Clanker] Participants:', Array.from(state.conversation.participants));
     }
+    chrome.runtime.sendMessage({ type: 'SET_AUTOMATED', automated: false }).catch(() => {});
 
     const messages = state.conversation.messages;
 
@@ -166,6 +184,9 @@
         console.log('[Clanker] Discarding deferred response — new messages arrived');
       }
     }
+
+    state.parseComplete = true;
+    console.log('[Clanker] Parse complete');
   }
 
   /**
@@ -291,6 +312,9 @@
     }
     if (deferred.customization !== undefined) {
       ConversationStorage.saveConversationCustomization(deferred.customization);
+    }
+    if (deferred.profiles !== undefined) {
+      ConversationStorage.saveConversationProfiles(deferred.profiles);
     }
   }
 

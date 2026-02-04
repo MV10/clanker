@@ -49,16 +49,7 @@
       // Still initialize observers in case config is added later
     }
 
-    // Verify page structure using parser
-    const verification = Parser.verifyPageStructure();
-    if (!verification.valid) {
-      console.warn('[Clanker] Page structure check failed:', verification.details);
-      showWarning('Clanker cannot recognize the page structure. Google Messages may have updated.');
-      state.initializing = false;
-      return;
-    }
-
-    // Set up observers and listeners (do this even if no conversation is active)
+    // Set up observers and listeners (do this even if no conversation is active yet)
     Observers.setupMessageObserver();
     Observers.setupInputObserver();
     Observers.setupConversationObserver();
@@ -69,25 +60,9 @@
       window.ClankerSidebar.initialize();
     }
 
-    // If no conversation is active, wait for one to be selected
-    if (!verification.hasActiveConversation) {
-      console.log('[Clanker] No active conversation, waiting for selection');
-      // The conversation observer will detect when a conversation becomes active
-    } else {
-      // Detect current conversation and parse it
-      state.conversationChanging = true;  // Block message processing until parsed
-      state.parseComplete = false;        // Mark parse as incomplete
-      const conversationId = Parser.detectConversationId();
-      await handleConversationChange(conversationId);
-      // Wait for messages to fully load before parsing
-      setTimeout(() => {
-        if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
-          window.ClankerMessages.parseExistingConversation();
-        }
-        state.parseComplete = true;           // Mark parse as complete
-        state.conversationChanging = false;   // Re-enable message processing
-      }, 500);
-    }
+    // Try to detect and parse the current conversation.
+    // If the DOM isn't ready yet, silently retry at 1s intervals.
+    attemptInitialConversationDetection();
 
     // Notify background that content script is ready
     chrome.runtime.sendMessage({ type: 'CONTENT_READY' });
@@ -95,6 +70,42 @@
     state.initializing = false;
     state.initialized = true;
     console.log('[Clanker] Initialized successfully, mode:', state.mode);
+  }
+
+  /**
+   * Attempt to detect and load the current conversation.
+   * If no conversation is found (DOM not ready yet), retries every 1s.
+   * Once detected, hands off to handleConversationChange + parseExistingConversation.
+   * Does nothing if a conversation was already detected by another path (e.g. conversation observer).
+   */
+  function attemptInitialConversationDetection() {
+    const conversationId = Parser.detectConversationId();
+    if (conversationId) {
+      console.log('[Clanker] Conversation detected:', conversationId);
+      state.conversationChanging = true;
+      state.parseComplete = false;
+      handleConversationChange(conversationId).then(() => {
+        // parseExistingConversation manages state.parseComplete itself
+        if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
+          window.ClankerMessages.parseExistingConversation();
+        }
+        state.conversationChanging = false;
+      });
+      return;
+    }
+
+    // No conversation found yet — the user may be on the sidebar without
+    // a conversation selected, or the DOM is still loading. Retry silently.
+    // The conversation observer will also catch URL-based changes, but this
+    // handles the case where the URL already points to a conversation whose
+    // DOM elements haven't rendered yet.
+    console.log('[Clanker] No conversation detected yet, will retry in 1s');
+    setTimeout(() => {
+      // Don't retry if a conversation was already picked up by the conversation observer
+      if (!state.currentConversationId) {
+        attemptInitialConversationDetection();
+      }
+    }, 1000);
   }
 
   /**
@@ -138,9 +149,10 @@
       const modeKey = `mode_${state.currentConversationId}`;
       const summaryKey = `summary_${state.currentConversationId}`;
       const customizationKey = `customization_${state.currentConversationId}`;
+      const profilesKey = `profiles_${state.currentConversationId}`;
       const lastMessageKey = `lastMessage_${state.currentConversationId}`;
 
-      const stored = await Storage.get([modeKey, summaryKey, customizationKey, lastMessageKey]);
+      const stored = await Storage.get([modeKey, summaryKey, customizationKey, profilesKey, lastMessageKey]);
 
       // Get recent messages from parser (images are now included in messages array)
       const context = Parser.parseConversation();
@@ -153,6 +165,23 @@
         isClanker: m.isClanker,
         timestamp: m.timestamp
       }));
+
+      // Collect all known participant names for sanitization support.
+      // Multiple sources are merged because the DOM may have unloaded older messages.
+      const headerNames = Parser.extractParticipantNames();
+      const freshParticipants = context.participants ? Array.from(context.participants) : [];
+      const stateParticipants = state.conversation?.participants
+        ? Array.from(state.conversation.participants) : [];
+      const configuredUserName = state.config?.userName || null;
+
+      // Merge all sources into a deduplicated list
+      const allRawNames = [...new Set([...headerNames, ...freshParticipants, ...stateParticipants])];
+
+      // Also build the LLM-view names (with "You" replaced by configured name).
+      // This is the exact name set the LLM uses when writing summaries.
+      const llmViewNames = configuredUserName
+        ? allRawNames.map(n => n === 'You' ? configuredUserName : n)
+        : allRawNames;
 
       return {
         success: true,
@@ -168,8 +197,11 @@
         storedMode: stored[modeKey] || null,
         storedSummary: stored[summaryKey] || null,
         storedCustomization: stored[customizationKey] || null,
+        storedProfiles: stored[profilesKey] || null,
         storedLastMessage: stored[lastMessageKey] || null,
-        recentMessages
+        recentMessages,
+        allParticipantNames: [...new Set([...allRawNames, ...llmViewNames])],
+        configuredUserName
       };
     } catch (error) {
       return { success: false, error: error.message };
@@ -189,12 +221,14 @@
       const modeKey = `mode_${state.currentConversationId}`;
       const summaryKey = `summary_${state.currentConversationId}`;
       const customizationKey = `customization_${state.currentConversationId}`;
+      const profilesKey = `profiles_${state.currentConversationId}`;
       const imageCacheKey = `image_cache_${state.currentConversationId}`;
       const lastMessageKey = `lastMessage_${state.currentConversationId}`;
 
       await Storage.remove(modeKey);
       await Storage.remove(summaryKey);
       await Storage.remove(customizationKey);
+      await Storage.remove(profilesKey);
       await Storage.remove(imageCacheKey);
       await Storage.remove(lastMessageKey);
 
@@ -202,6 +236,7 @@
       state.mode = MODES.DEACTIVATED;
       state.conversationSummary = null;
       state.conversationCustomization = null;
+      state.conversationProfiles = null;
       state.lastProcessedMessage = null;
       state.processedMessageIds.clear();
       LLM.cancelPendingResponse();
@@ -232,6 +267,7 @@
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
+      state.conversationProfiles = null;
       state.lastProcessedMessage = null;
       state.processedMessageIds.clear();
       state.currentConversationId = null;
@@ -279,6 +315,7 @@
     // Cancel any pending response when deactivating
     if (newMode === MODES.DEACTIVATED) {
       LLM.cancelPendingResponse();
+      LLM.stopNewsTimer();
     }
 
     // Insert mode change messages into the conversation (no popup notifications for these)
@@ -289,9 +326,11 @@
     } else if (newMode === MODES.ACTIVE) {
       // Any mode -> Active: LLM generates activation message
       LLM.generateActivationMessage();
+      LLM.startNewsTimer();
     } else if (newMode === MODES.AVAILABLE) {
       // Any mode -> Available: static message
       sendMessage('[clanker] AI is available but will only reply if you address it directly by name.');
+      LLM.startNewsTimer();
     }
   }
 
@@ -304,6 +343,7 @@
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
+      state.conversationProfiles = null;
       state.lastProcessedMessage = null;
       state.processedMessageIds.clear();
       LLM.cancelPendingResponse();
@@ -311,16 +351,20 @@
 
     state.currentConversationId = newConversationId;
 
-    // Load stored mode, summary, customization, and last message for this conversation
+    // Load stored mode, summary, customization, profiles, and last message for this conversation
     try {
       await ConversationStorage.loadConversationMode(showNotification);
       await ConversationStorage.loadConversationSummary();
       await ConversationStorage.loadConversationCustomization();
+      await ConversationStorage.loadConversationProfiles();
       await ConversationStorage.loadLastProcessedMessage();
     } catch (e) {
       // Storage may fail if extension context invalidated
       console.warn('[Clanker] Could not load conversation data');
     }
+
+    // Start news timer if mode is active/available (restoring from stored mode)
+    LLM.startNewsTimer();
   }
 
   /**
@@ -416,17 +460,27 @@
    * This ensures Angular recognizes the input and click.
    * If the user is typing, waits for the input field to clear first
    * to avoid destroying their in-progress text.
+   * @param {string} text - Message text to send
+   * @param {Object|null} typingParams - Typing simulation params, or null
+   * @param {number} _retryCount - Internal retry counter for user_typing races
    */
-  async function sendMessage(text) {
+  async function sendMessage(text, typingParams = null, _retryCount = 0) {
     // Wait for the user to finish typing before injecting into the input field
     await waitForInputClear();
 
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'SEND_CHAT_MESSAGE',
-        text: text
-      });
+      const payload = { type: 'SEND_CHAT_MESSAGE', text };
+      if (typingParams) {
+        payload.typingParams = typingParams;
+      }
+      const response = await chrome.runtime.sendMessage(payload);
       if (!response.success) {
+        // Handle race condition: user started typing between waitForInputClear and MAIN world script
+        if (response.error === 'user_typing' && _retryCount < 5) {
+          console.log('[Clanker] User typing detected at send time, retrying (' + (_retryCount + 1) + '/5)');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return sendMessage(text, typingParams, _retryCount + 1);
+        }
         showNotification('Failed to send message: ' + response.error, 'error');
       }
       return response.success;
