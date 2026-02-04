@@ -103,8 +103,39 @@ When returning to a conversation, detect and handle messages that arrived while 
 * In Active mode: LLM is consulted for ALL new human messages; LLM decides whether to respond (can return null)
 * In Available mode: LLM is only invoked when "clanker" is mentioned
 * If the local user is already typing a message, the LLM should not respond
-* Humans are slow; before responding, wait a few seconds to give the local user a chance to start typing
+* Humans are slow; before responding, wait before replying to give the local user a chance to start typing
 * If a new message arrives while a response is pending, cancel the pending response and evaluate the new message instead (debouncing)
+
+## Relaxed Responsiveness
+
+A "Relaxed responsiveness" checkbox (on by default) enables human-like reading delays and typing simulation.
+
+### Reading Delay
+When relaxed mode is on, the response delay is based on message content rather than a flat timer:
+* Text messages: delay scales with character count at a simulated reading speed of 18-23 characters/second
+* Image messages: 500-1000ms additional delay
+* Minimum floor of 800ms
+* When multiple messages arrive in rapid succession, the reading delay extends (adds time for each new message) rather than resetting — the same response closure is reused
+
+When relaxed mode is off, the original flat 1.5-2 second random delay is used.
+
+### Typing Simulation
+After the LLM responds, the message is typed character-by-character into the input field:
+* The `[clanker]` prefix is inserted immediately
+* Remaining characters are inserted one at a time via `execCommand('insertText')`
+* Base typing speed is configurable (currently 350-450 cps in content-llm.js)
+* Each character has a randomized jitter delay added on top (currently 1-150ms)
+* Total typing time is capped at 8 seconds
+* Typing simulation is skipped when the per-character delay would be under 0.5ms
+
+### User-Typing Protection
+A race condition existed where the MAIN world script could overwrite user input that started after `waitForInputClear` passed but before the script executed. This is fixed by:
+* The MAIN world script checks the textarea content before clearing — if non-empty and not UI text (SMS/RCS labels), it returns a `user_typing` error instead of destroying the input
+* `sendMessage` retries up to 5 times with 1-second delays on `user_typing` errors
+
+### Sidebar Exceptions
+* Sidebar "process" mode: all delays and typing simulation are skipped (instant response)
+* Sidebar "idle" mode: reading delays and typing simulation apply normally when relaxed mode is on
 * Images in the conversation are included inline in the message history as [IMAGE: blob:...] references
 
 ## Concurrency Control
@@ -269,6 +300,7 @@ The LLM-generated activation message receives context about the conversation and
 * `model` - LLM model identifier
 * `userName` - Local user's display name (replaces "You" in LLM context)
 * `historySize` - Number of recent messages to send literally (10-500, default 20)
+* `relaxedResponsiveness` - Enable human-like reading/typing delays (boolean, default true)
 
 ### Per-Conversation Data
 * `mode_{conversationId}` - Operating mode for the conversation

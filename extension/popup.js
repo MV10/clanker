@@ -17,7 +17,8 @@ const STORAGE_KEYS = {
   NEWS_SEARCH: 'newsSearch',
   NEWS_MAX_SEARCHES: 'newsMaxSearches',
   NEWS_QUIET_START: 'newsQuietStart',
-  NEWS_QUIET_STOP: 'newsQuietStop'
+  NEWS_QUIET_STOP: 'newsQuietStop',
+  RELAXED_RESPONSIVENESS: 'relaxedResponsiveness'
 };
 
 /**
@@ -36,6 +37,7 @@ const elements = {
   newsMaxSearches: document.getElementById('news-max-searches'),
   newsQuietStart: document.getElementById('news-quiet-start'),
   newsQuietStop: document.getElementById('news-quiet-stop'),
+  relaxedResponsiveness: document.getElementById('relaxed-responsiveness'),
   saveBtn: document.getElementById('save-btn'),
   testBtn: document.getElementById('test-btn'),
   statusBanner: document.getElementById('status-banner'),
@@ -69,6 +71,8 @@ async function loadSettings() {
     }
     elements.webSearch.checked = !!result[STORAGE_KEYS.WEB_SEARCH];
     elements.newsSearch.checked = !!result[STORAGE_KEYS.NEWS_SEARCH];
+    elements.relaxedResponsiveness.checked = result[STORAGE_KEYS.RELAXED_RESPONSIVENESS] !== undefined
+      ? !!result[STORAGE_KEYS.RELAXED_RESPONSIVENESS] : true;
     if (result[STORAGE_KEYS.NEWS_MAX_SEARCHES] !== undefined) {
       elements.newsMaxSearches.value = result[STORAGE_KEYS.NEWS_MAX_SEARCHES];
     }
@@ -142,6 +146,7 @@ async function saveSettings(event) {
   const sidebarMode = elements.sidebarMode.value;
   const webSearch = elements.webSearch.checked;
   const newsSearch = elements.newsSearch.checked;
+  const relaxedResponsiveness = elements.relaxedResponsiveness.checked;
   const newsMaxSearches = Math.max(1, Math.min(100, parseInt(elements.newsMaxSearches.value, 10) || 10));
   const newsQuietStart = Math.max(0, Math.min(23, parseInt(elements.newsQuietStart.value, 10) || 21));
   const newsQuietStop = Math.max(0, Math.min(23, parseInt(elements.newsQuietStop.value, 10) || 9));
@@ -169,6 +174,7 @@ async function saveSettings(event) {
     [STORAGE_KEYS.SIDEBAR_MODE]: sidebarMode,
     [STORAGE_KEYS.WEB_SEARCH]: webSearch,
     [STORAGE_KEYS.NEWS_SEARCH]: newsSearch,
+    [STORAGE_KEYS.RELAXED_RESPONSIVENESS]: relaxedResponsiveness,
     [STORAGE_KEYS.NEWS_MAX_SEARCHES]: newsMaxSearches,
     [STORAGE_KEYS.NEWS_QUIET_START]: newsQuietStart,
     [STORAGE_KEYS.NEWS_QUIET_STOP]: newsQuietStop

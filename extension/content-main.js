@@ -460,17 +460,27 @@
    * This ensures Angular recognizes the input and click.
    * If the user is typing, waits for the input field to clear first
    * to avoid destroying their in-progress text.
+   * @param {string} text - Message text to send
+   * @param {Object|null} typingParams - Typing simulation params, or null
+   * @param {number} _retryCount - Internal retry counter for user_typing races
    */
-  async function sendMessage(text) {
+  async function sendMessage(text, typingParams = null, _retryCount = 0) {
     // Wait for the user to finish typing before injecting into the input field
     await waitForInputClear();
 
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'SEND_CHAT_MESSAGE',
-        text: text
-      });
+      const payload = { type: 'SEND_CHAT_MESSAGE', text };
+      if (typingParams) {
+        payload.typingParams = typingParams;
+      }
+      const response = await chrome.runtime.sendMessage(payload);
       if (!response.success) {
+        // Handle race condition: user started typing between waitForInputClear and MAIN world script
+        if (response.error === 'user_typing' && _retryCount < 5) {
+          console.log('[Clanker] User typing detected at send time, retrying (' + (_retryCount + 1) + '/5)');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return sendMessage(text, typingParams, _retryCount + 1);
+        }
         showNotification('Failed to send message: ' + response.error, 'error');
       }
       return response.success;

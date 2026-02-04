@@ -18,7 +18,8 @@ const STORAGE_KEYS = {
   NEWS_SEARCH: 'newsSearch',
   NEWS_MAX_SEARCHES: 'newsMaxSearches',
   NEWS_QUIET_START: 'newsQuietStart',
-  NEWS_QUIET_STOP: 'newsQuietStop'
+  NEWS_QUIET_STOP: 'newsQuietStop',
+  RELAXED_RESPONSIVENESS: 'relaxedResponsiveness'
 };
 
 /**
@@ -123,7 +124,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'SEND_CHAT_MESSAGE':
       // Send a chat message using main world injection
-      handleSendMessage(sender.tab?.id, message.text).then(sendResponse);
+      handleSendMessage(sender.tab?.id, message.text, message.typingParams || null).then(sendResponse);
       return true;
 
     case 'DETACH_DEBUGGER':
@@ -572,21 +573,34 @@ async function handleClickElement(tabId, elementId) {
 
 /**
  * Send a message by setting textarea value and clicking send - all in main world
+ * @param {number} tabId
+ * @param {string} text
+ * @param {Object|null} typingParams - If provided, simulate per-character typing
+ *   { prefixLength: number, perCharDelayMs: number }
  */
-async function handleSendMessage(tabId, text) {
+async function handleSendMessage(tabId, text, typingParams) {
   if (!tabId || !text) {
     return { success: false, error: 'Missing tab ID or text' };
   }
 
   try {
     // Step 1: Set the textarea value using execCommand to simulate real typing
-    await chrome.scripting.executeScript({
+    // The MAIN world script checks for user content before clearing
+    const [result] = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: (messageText) => {
+      func: (messageText, tp) => {
         const textarea = document.querySelector('[data-e2e-message-input-box]');
         if (!textarea) {
-          return false;
+          return { success: false, error: 'no_textarea' };
+        }
+
+        // Check for user content before clearing
+        const existingContent = textarea.value || textarea.textContent || '';
+        const trimmed = existingContent.trim();
+        const isUIText = /^(SMS|RCS)(\s+(SMS|RCS))*$/i.test(trimmed);
+        if (trimmed.length > 0 && !isUIText) {
+          return { success: false, error: 'user_typing' };
         }
 
         // Focus the textarea
@@ -596,7 +610,20 @@ async function handleSendMessage(tabId, text) {
         textarea.select();
         document.execCommand('delete', false, null);
 
-        // Insert new text using execCommand (simulates actual typing)
+        if (tp) {
+          // Typing simulation: insert prefix immediately, then type rest char-by-char
+          const prefix = messageText.substring(0, tp.prefixLength);
+          const rest = messageText.substring(tp.prefixLength);
+
+          if (prefix) {
+            document.execCommand('insertText', false, prefix);
+          }
+
+          // Return the rest to type char-by-char asynchronously
+          return { success: true, typingRest: rest, perCharDelayMs: tp.perCharDelayMs, jitterMinMs: tp.jitterMinMs || 0, jitterMaxMs: tp.jitterMaxMs || 0 };
+        }
+
+        // No typing simulation: insert all at once
         const inserted = document.execCommand('insertText', false, messageText);
 
         if (!inserted) {
@@ -610,10 +637,42 @@ async function handleSendMessage(tabId, text) {
         textarea.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
         textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
 
-        return true;
+        return { success: true };
       },
-      args: [text]
+      args: [text, typingParams || null]
     });
+
+    const scriptResult = result?.result;
+
+    if (!scriptResult || !scriptResult.success) {
+      const err = scriptResult?.error || 'unknown';
+      return { success: false, error: err };
+    }
+
+    // If typing simulation was requested, run async char-by-char loop
+    if (scriptResult.typingRest !== undefined) {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: async (restText, delayMs, jitterMin, jitterMax) => {
+          const textarea = document.querySelector('[data-e2e-message-input-box]');
+          if (!textarea) return;
+
+          for (let i = 0; i < restText.length; i++) {
+            const jitter = jitterMin + Math.random() * (jitterMax - jitterMin);
+            await new Promise(r => setTimeout(r, delayMs + jitter));
+            textarea.focus();
+            document.execCommand('insertText', false, restText[i]);
+          }
+
+          // Dispatch events once at end
+          textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+          textarea.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+          textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        },
+        args: [scriptResult.typingRest, scriptResult.perCharDelayMs, scriptResult.jitterMinMs, scriptResult.jitterMaxMs]
+      });
+    }
 
     // Step 2: Brief wait for Angular to process
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -690,7 +749,9 @@ async function handleGetConfig() {
         newsSearch: !!config[STORAGE_KEYS.NEWS_SEARCH],
         newsMaxSearches: config[STORAGE_KEYS.NEWS_MAX_SEARCHES] || 10,
         newsQuietStart: config[STORAGE_KEYS.NEWS_QUIET_START] ?? 21,
-        newsQuietStop: config[STORAGE_KEYS.NEWS_QUIET_STOP] ?? 9
+        newsQuietStop: config[STORAGE_KEYS.NEWS_QUIET_STOP] ?? 9,
+        relaxedResponsiveness: config[STORAGE_KEYS.RELAXED_RESPONSIVENESS] !== undefined
+          ? !!config[STORAGE_KEYS.RELAXED_RESPONSIVENESS] : true
       }
     };
   } catch (error) {

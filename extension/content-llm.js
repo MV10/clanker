@@ -19,6 +19,8 @@
       clearTimeout(state.pendingResponseTimer);
       state.pendingResponseTimer = null;
       state.pendingResponseMessageId = null;
+      state.pendingAttemptResponse = null;
+      state.responseTargetTime = 0;
       console.log('[Clanker] Cancelled pending response');
     }
     // Increment request ID to invalidate any in-flight LLM requests
@@ -27,22 +29,91 @@
   }
 
   /**
+   * Calculate human-like reading delay for a message
+   * @param {Object} message - Message with type and content
+   * @returns {number} Delay in milliseconds
+   */
+  function calculateReadingDelay(message) {
+    let delayMs = 0;
+    if (message.type === 'image' || message.type === 'text+image') {
+      delayMs += 500 + Math.random() * 500;  // 500-1000ms for images
+    }
+    if (message.content && message.type !== 'image') {
+      const charsPerSec = 18 + Math.random() * 5;  // 18-23 cps reading speed
+      delayMs += (message.content.length / charsPerSec) * 1000;
+    }
+    return delayMs;
+  }
+
+  /**
    * Schedule a response with delay (with debouncing)
+   * Three paths:
+   *   A) Sidebar "process" mode — fire immediately
+   *   B) Extend existing delay — add reading time for new message
+   *   C) Fresh schedule — new timer with reading delay or flat delay
    */
   function scheduleResponse(triggerMessage) {
+    const relaxed = !!state.config?.relaxedResponsiveness;
+
+    // Path A: Sidebar "process" mode — skip all delays, fire immediately
+    if (state.sidebar.isProcessing && state.sidebar.mode === 'process') {
+      cancelPendingResponse();
+      state.llmRequestId++;
+      const requestId = state.llmRequestId;
+      state.pendingResponseMessageId = triggerMessage.id;
+
+      // Fire immediately (still async to avoid blocking)
+      const attemptResponse = async () => {
+        state.pendingResponseTimer = null;
+        state.pendingResponseMessageId = null;
+        state.pendingAttemptResponse = null;
+
+        if (requestId !== state.llmRequestId) return;
+        if (state.mode === MODES.DEACTIVATED || state.mode === MODES.UNINITIALIZED) return;
+
+        if (state.llmInFlight) {
+          state.pendingResponseTimer = setTimeout(attemptResponse, 500);
+          return;
+        }
+
+        await generateAndSendResponse(requestId);
+      };
+
+      state.pendingResponseTimer = setTimeout(attemptResponse, 0);
+      console.log('[Clanker] Scheduled immediate response (process mode):', triggerMessage.id);
+      return;
+    }
+
+    // Path B: Extend existing delay when relaxed mode is ON and a timer is pending
+    if (relaxed && state.pendingResponseTimer && state.pendingAttemptResponse) {
+      const additional = calculateReadingDelay(triggerMessage);
+      state.responseTargetTime += additional;
+      clearTimeout(state.pendingResponseTimer);
+      const remaining = Math.max(0, state.responseTargetTime - Date.now());
+      state.pendingResponseTimer = setTimeout(state.pendingAttemptResponse, remaining);
+      console.log('[Clanker] Extended response delay by', Math.round(additional) + 'ms, remaining:', Math.round(remaining) + 'ms');
+      return;
+    }
+
+    // Path C: Fresh schedule
     cancelPendingResponse();
 
-    // Increment request ID to invalidate any in-flight requests
     state.llmRequestId++;
     const requestId = state.llmRequestId;
 
     state.pendingResponseMessageId = triggerMessage.id;
 
-    const delay = state.responseDelayMinMs + Math.random() * (state.responseDelayMaxMs - state.responseDelayMinMs);
+    let delay;
+    if (relaxed) {
+      delay = Math.max(800, calculateReadingDelay(triggerMessage));  // min 800ms floor
+    } else {
+      delay = state.responseDelayMinMs + Math.random() * (state.responseDelayMaxMs - state.responseDelayMinMs);
+    }
 
     const attemptResponse = async () => {
       state.pendingResponseTimer = null;
       state.pendingResponseMessageId = null;
+      state.pendingAttemptResponse = null;
 
       // Check if this request was superseded by a newer one
       if (requestId !== state.llmRequestId) {
@@ -74,9 +145,11 @@
       await generateAndSendResponse(requestId);
     };
 
+    state.responseTargetTime = Date.now() + delay;
+    state.pendingAttemptResponse = attemptResponse;  // store for Path B reuse
     state.pendingResponseTimer = setTimeout(attemptResponse, delay);
 
-    console.log('[Clanker] Scheduled response to message:', triggerMessage.id, '(request', requestId + ')');
+    console.log('[Clanker] Scheduled response to message:', triggerMessage.id, '(request', requestId + ', delay', Math.round(delay) + 'ms)');
   }
 
   /**
@@ -105,6 +178,9 @@
       hasSummary: !!state.conversationSummary,
       hasCustomization: !!state.conversationCustomization
     });
+
+    // Record when the API request starts (for typing delay calculation)
+    state.apiRequestStartTime = Date.now();
 
     try {
       let response = await chrome.runtime.sendMessage({
@@ -162,7 +238,23 @@
         // LLM can return null response if it decides not to reply
         if (response.content) {
           if (window.ClankerMain && window.ClankerMain.sendMessage) {
-            await window.ClankerMain.sendMessage(`[clanker] ${response.content}`);
+            // Calculate typing simulation params if relaxed mode is on
+            const relaxed = !!state.config?.relaxedResponsiveness;
+            const skipTyping = state.sidebar.isProcessing && state.sidebar.mode === 'process';
+
+            let typingParams = null;
+            if (relaxed && !skipTyping && response.content) {
+              const contentLength = response.content.length;
+              const charsPerSec = 350 + Math.random() * 100;  // 350-450 cps (high, but jitter will slow it)
+              let typingMs = (contentLength / charsPerSec) * 1000;
+              typingMs = Math.min(typingMs, 8000);  // Cap at 8 seconds
+              const perCharDelayMs = contentLength > 0 ? typingMs / contentLength : 0;
+              if (perCharDelayMs > 0.5) {
+                typingParams = { prefixLength: '[clanker] '.length, perCharDelayMs, jitterMinMs: 1, jitterMaxMs: 150 };
+              }
+            }
+
+            await window.ClankerMain.sendMessage(`[clanker] ${response.content}`, typingParams);
           }
         } else {
           console.log('[Clanker] LLM chose not to respond');
@@ -686,6 +778,9 @@
     state.llmInFlight = true;
     if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
 
+    // Record when the API request starts (for typing delay calculation)
+    state.apiRequestStartTime = Date.now();
+
     const maxSearches = state.config?.newsMaxSearches || 10;
 
     // Build a minimal context for the LLM
@@ -701,7 +796,8 @@
       'Ignore routine news, scheduled events, minor updates, casual relevance, and low-interest content. ' +
       'If nothing meets this high bar, return {"response": null}. ' +
       'Do NOT force a response just because you searched. Most checks should result in null. ' +
-      'If you do respond, keep it natural and conversational, as if you just noticed something interesting.';
+      'If you do respond, keep it natural and conversational, as if you just noticed something interesting.' +
+      'If you have no participant profile data or limited data, do not respond.';
 
     try {
       const response = await chrome.runtime.sendMessage({
@@ -729,7 +825,22 @@
         if (response.content) {
           console.log('[Clanker] News search produced a response');
           if (window.ClankerMain && window.ClankerMain.sendMessage) {
-            await window.ClankerMain.sendMessage(`[clanker] ${response.content}`);
+            // Calculate typing simulation params for news responses
+            const relaxed = !!state.config?.relaxedResponsiveness;
+
+            let typingParams = null;
+            if (relaxed && response.content) {
+              const contentLength = response.content.length;
+              const charsPerSec = 350 + Math.random() * 100;  // 350-450 cps (high, but jitter will slow it)
+              let typingMs = (contentLength / charsPerSec) * 1000;
+              typingMs = Math.min(typingMs, 8000);
+              const perCharDelayMs = contentLength > 0 ? typingMs / contentLength : 0;
+              if (perCharDelayMs > 0.5) {
+                typingParams = { prefixLength: '[clanker] '.length, perCharDelayMs, jitterMinMs: 1, jitterMaxMs: 150 };
+              }
+            }
+
+            await window.ClankerMain.sendMessage(`[clanker] ${response.content}`, typingParams);
           }
         } else {
           console.log('[Clanker] News search found nothing noteworthy');
