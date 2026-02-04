@@ -146,7 +146,7 @@
       // Skip conversation currently being processed by sidebar
       if (conversationId === state.sidebar.currentlyProcessingId) continue;
 
-      // Skip automated-message conversations (participant name is a 10-digit number)
+      // Skip automated-message conversations (participant name is a digits-only number)
       const conversationName = SidebarParser.getConversationName(item);
       if (ClankerPatterns.AUTOMATED_PARTICIPANT.test(conversationName)) continue;
 

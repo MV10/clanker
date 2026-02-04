@@ -115,8 +115,8 @@ const ClankerPatterns = {
   // Matches both "clanker" and "clank"
   CLANKER_MENTION: /clank(er)?/i,
 
-  // Automated message conversations have a participant name that is a 10-digit phone number
-  AUTOMATED_PARTICIPANT: /^\d{10}$/,
+  // Automated message conversations have a participant name that is a digits-only number (1-10 digits)
+  AUTOMATED_PARTICIPANT: /^\d{1,10}$/,
 };
 
 /**
@@ -532,7 +532,7 @@ const ClankerParser = {
 
   /**
    * Check if a participant set contains an automated-message participant
-   * (identified by a name that is exactly a 10-digit phone number)
+   * (identified by a name that is a digits-only number of 1-10 digits)
    * @param {Set<string>|string[]} participants
    * @returns {boolean}
    */

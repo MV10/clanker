@@ -82,9 +82,11 @@
     // Use parser to get full conversation context
     state.conversation = Parser.parseConversation();
 
-    // Check for automated-message conversations (participant is a 10-digit number).
+    // Check for automated-message conversations (participant is a digits-only number, 1-10 digits).
     // Use header names first (available before messages load), fall back to parsed participants.
     const headerNames = Parser.extractParticipantNames();
+    console.log('[Clanker] A2P check — headerNames:', JSON.stringify(headerNames),
+      'participants:', JSON.stringify([...state.conversation.participants]));
     if (Parser.hasAutomatedParticipant(headerNames) ||
         Parser.hasAutomatedParticipant(state.conversation.participants)) {
       console.log('[Clanker] Automated-message conversation detected, ignoring');

@@ -1026,7 +1026,7 @@ function sanitizeDiagnosticState(data) {
     if (nameMap.has(name)) return nameMap.get(name);
 
     let redacted;
-    if (/^\d{10}$/.test(name)) {
+    if (/^\d{1,10}$/.test(name)) {
       phoneCounter++;
       redacted = `(${String(phoneCounter).padStart(3, '0')}) XXX-XXXX`;
     } else {
