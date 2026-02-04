@@ -1,7 +1,7 @@
 # Overview
 * Refer to the local README.md for a high level description.
 * The extension is restricted to processing pages from messages.google.com
-* Process conversational text and still-image attachments 
+* Processes conversational text and still-image attachments 
 * During ongoing conversations, only process new comments, do not re-parse the entire page on each update
 * LLM replies must be prefixed with "[clanker]" so human users know it is LLM output
 * The LLM will use the local user's input field and send button to participate in the conversation
@@ -69,7 +69,6 @@
 * Warn the local user if extension configuration items are missing (Uninitialized mode)
 * Warn the local user if the LLM can't recognize the page structure, then stop processing the page
 * Only the active conversation should be processed
-* Disregard the sidebar listing other conversations
 * Disregard the page header, menus, user menu, and so on
 * Evaluate the page content and find the active conversation region
 * Review the available conversation history and catalog all participants
@@ -130,7 +129,7 @@ After the LLM responds, the message is typed character-by-character into the inp
 
 ### User-Typing Protection
 A race condition existed where the MAIN world script could overwrite user input that started after `waitForInputClear` passed but before the script executed. This is fixed by:
-* The MAIN world script checks the textarea content before clearing — if non-empty and not UI text (SMS/RCS labels), it returns a `user_typing` error instead of destroying the input
+* The MAIN world script checks the textarea content before clearing; if non-empty and not UI text (SMS/RCS labels), it returns a `user_typing` error instead of destroying the input
 * `sendMessage` retries up to 5 times with 1-second delays on `user_typing` errors
 
 ### Sidebar Exceptions
@@ -281,9 +280,9 @@ The extension operates in one of four modes, controlled via a browser context me
 ## Mode Transition Messages
 When modes change, the extension inserts a message to inform conversation participants:
 
-* **Any → Available**: Extension inserts "[clanker] AI is available but will only reply if you address it directly by name."
-* **Any → Active**: LLM generates a brief activation message (e.g., "Hey everyone, I'm here!")
-* **Any → Deactivated**: Extension inserts "[clanker] The AI has been deactivated for this conversation."
+* **Any >> Available**: Extension inserts "[clanker] AI is available but will only reply if you address it directly by name."
+* **Any >> Active**: LLM generates a brief activation message (e.g., "Hey everyone, I'm here!")
+* **Any >> Deactivated**: Extension inserts "[clanker] The AI has been deactivated for this conversation."
 
 The LLM-generated activation message receives context about the conversation and a one-time instruction to announce its presence briefly and casually.
 
@@ -360,9 +359,9 @@ Each conversation in the sidebar is an anchor element:
 ## Conversation Evaluation
 
 When a snippet change is detected, the conversation is evaluated against its stored mode:
-* No stored mode or Deactivated mode — skip (never process conversations the user hasn't activated)
-* Available mode — only process if the snippet text mentions Clanker
-* Active mode — always process
+* No stored mode or Deactivated mode -- skip (never process conversations the user hasn't activated)
+* Available mode -- only process if the snippet text mentions Clanker
+* Active mode -- always process
 * Conversations that pass evaluation are added to the todo queue (if not already present)
 
 ## Processing Orchestration
@@ -379,7 +378,7 @@ When a snippet change is detected, the conversation is evaluated against its sto
 2. Display a banner: "Clanker is processing an inactive conversation, please wait..."
 3. Find the sidebar anchor for the target conversation and click it
 4. Wait for the conversation change to be confirmed (poll `state.currentConversationId`, 200ms interval, 10s timeout)
-5. The existing conversation-change pipeline handles loading: `handleConversationChange` → `parseExistingConversation` → mode restore → message processing → LLM invocation
+5. The existing conversation-change pipeline handles loading: `handleConversationChange` >> `parseExistingConversation` >> mode restore >> message processing >> LLM invocation
 6. Wait for the pipeline to complete: `parseComplete` is true, no LLM in flight, no pending response timer, plus a 1-second settle period for sent messages to appear in the DOM (polled at 500ms, 60s safety timeout)
 7. Process the next conversation in the queue, or return to the foreground
 
@@ -401,9 +400,9 @@ If the user manually changes the conversation while sidebar processing is in pro
 ## Activity Tracking Integration
 
 Multiple modules feed into the sidebar activity timestamp:
-* **content-observers.js** — URL changes, history events, input field mutations
-* **content-messages.js** — New messages processed
-* **content-llm.js** — LLM requests started and completed
+* **content-observers.js** -- URL changes, history events, input field mutations
+* **content-messages.js** -- New messages processed
+* **content-llm.js** -- LLM requests started and completed
 
 This timestamp is used by idle mode to determine when 10 minutes of inactivity have elapsed.
 

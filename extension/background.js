@@ -419,31 +419,35 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
       });
     }
 
+    const provider = detectProvider(config[STORAGE_KEYS.API_ENDPOINT]);
+
     // Add actual image data if this is a follow-up request with image
     if (imageData) {
-      // For vision-capable models, include as image content
-      apiMessages.push({
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `[IMAGE DATA for ${imageData.src} - ${imageData.width}x${imageData.height}]`
-          },
-          {
-            type: 'image_url',
-            image_url: {
-              url: imageData.dataUrl,
-              detail: 'high'
-            }
-          }
-        ]
-      });
+      // Format varies by provider
+      const imageLabel = `[IMAGE DATA for ${imageData.src} - ${imageData.width}x${imageData.height}]`;
+      if (provider === 'xai') {
+        // xAI uses input_text/input_image with flat image_url string
+        apiMessages.push({
+          role: 'user',
+          content: [
+            { type: 'input_text', text: imageLabel },
+            { type: 'input_image', image_url: imageData.dataUrl, detail: 'high' }
+          ]
+        });
+      } else {
+        // OpenAI / Anthropic / generic use text/image_url with nested object
+        apiMessages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: imageLabel },
+            { type: 'image_url', image_url: { url: imageData.dataUrl, detail: 'high' } }
+          ]
+        });
+      }
     }
 
     // Add recent literal messages (images are inline as [IMAGE: blob:...] format)
     apiMessages.push(...messages);
-
-    const provider = detectProvider(config[STORAGE_KEYS.API_ENDPOINT]);
     const webSearch = !!config[STORAGE_KEYS.WEB_SEARCH];
     const apiUrl = getApiUrl(config[STORAGE_KEYS.API_ENDPOINT], provider, webSearch);
 
