@@ -1,8 +1,6 @@
 # Enhancements, Ideas, etc.
 
-* The LLM response will still overwrite anything the local user is typing. If the user has already started typing, store the LLM response and wait for the input textarea to be blank (which indicates the user sent the message, or the user deleted what they typed).
-
-* Add more human-like delays to response-time (including additional delays if new messages arrive during the delay), and after a response is received, add further delays based on response length to simulate typing.
+* The settings page should respect system light/dark mode configuration, if available.
 
 * Update system prompts: In addition to prohibiting Markdown, also avoid all use of HTML and citations. Don't search the web unless specifically asked to read something, or it seems necessary for confirmation or understanding. Proving a point during trivial conversation is not a good reason to run web searches. Although responses are generally optional, the AI _must_ reply whenever it is directly addressed by name. Avoid long sequences of emojis; occasional use is fine but don't go crazy with them. Warn against making the summary too terse, it should permit a general understanding of older aspects of the conversation.
 
