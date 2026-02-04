@@ -114,6 +114,9 @@ const ClankerPatterns = {
   // Pattern to detect when Clanker is mentioned (for Available mode)
   // Matches both "clanker" and "clank"
   CLANKER_MENTION: /clank(er)?/i,
+
+  // Automated message conversations have a participant name that is a 10-digit phone number
+  AUTOMATED_PARTICIPANT: /^\d{10}$/,
 };
 
 /**
@@ -525,6 +528,21 @@ const ClankerParser = {
    */
   mentionsClanker(content) {
     return ClankerPatterns.CLANKER_MENTION.test(content);
+  },
+
+  /**
+   * Check if a participant set contains an automated-message participant
+   * (identified by a name that is exactly a 10-digit phone number)
+   * @param {Set<string>|string[]} participants
+   * @returns {boolean}
+   */
+  hasAutomatedParticipant(participants) {
+    for (const name of participants) {
+      if (ClankerPatterns.AUTOMATED_PARTICIPANT.test(name)) {
+        return true;
+      }
+    }
+    return false;
   },
 
   /**

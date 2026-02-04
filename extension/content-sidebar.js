@@ -9,6 +9,7 @@
   'use strict';
 
   const SidebarParser = window.ClankerSidebarParser;
+  const ClankerPatterns = window.ClankerPatterns;
   const Storage = window.ClankerStorage;
   const { state, MODES } = window.ClankerState;
 
@@ -144,6 +145,10 @@
 
       // Skip conversation currently being processed by sidebar
       if (conversationId === state.sidebar.currentlyProcessingId) continue;
+
+      // Skip automated-message conversations (participant name is a 10-digit number)
+      const conversationName = SidebarParser.getConversationName(item);
+      if (ClankerPatterns.AUTOMATED_PARTICIPANT.test(conversationName)) continue;
 
       const snippetText = SidebarParser.getSnippetText(item);
       const previousSnippet = state.sidebar.pendingSnippets.get(conversationId);

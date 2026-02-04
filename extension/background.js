@@ -67,6 +67,11 @@ const MENU_IDS = {
 const tabModes = new Map();
 
 /**
+ * Track which tabs are viewing an automated-message conversation
+ */
+const tabAutomated = new Map();
+
+/**
  * Track which tabs have debugger attached
  */
 const debuggerAttached = new Set();
@@ -120,6 +125,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Content script requests debugger detach (after deactivation message sent)
       detachDebugger(sender.tab?.id).then(() => sendResponse({ success: true }));
       return true;
+
+    case 'SET_AUTOMATED':
+      // Content script reports whether current conversation is automated
+      if (sender.tab?.id) {
+        tabAutomated.set(sender.tab.id, !!message.automated);
+        updateContextMenuForTab(sender.tab.id);
+      }
+      sendResponse({ success: true });
+      return false;
 
     default:
       console.warn('Unknown message type:', message.type);
@@ -1035,22 +1049,38 @@ async function updateToolbarIcon(tabId, mode) {
  */
 async function updateContextMenuForTab(tabId) {
   const { mode } = await handleGetMode(tabId);
+  const isAutomated = tabAutomated.get(tabId) || false;
 
   // If uninitialized, disable mode options
   const enabled = mode !== MODES.UNINITIALIZED;
 
+  // In automated-message conversations, hide everything except Settings
+  const showNonSettings = !isAutomated;
+
   try {
     await chrome.contextMenus.update(MENU_IDS.MODE_DEACTIVATED, {
       checked: mode === MODES.DEACTIVATED || mode === MODES.UNINITIALIZED,
-      enabled
+      enabled,
+      visible: showNonSettings
     });
     await chrome.contextMenus.update(MENU_IDS.MODE_AVAILABLE, {
       checked: mode === MODES.AVAILABLE,
-      enabled
+      enabled,
+      visible: showNonSettings
     });
     await chrome.contextMenus.update(MENU_IDS.MODE_ACTIVE, {
       checked: mode === MODES.ACTIVE,
-      enabled
+      enabled,
+      visible: showNonSettings
+    });
+    await chrome.contextMenus.update(MENU_IDS.SEPARATOR, {
+      visible: showNonSettings
+    });
+    await chrome.contextMenus.update(MENU_IDS.SEPARATOR2, {
+      visible: showNonSettings
+    });
+    await chrome.contextMenus.update(MENU_IDS.DIAGNOSTICS, {
+      visible: showNonSettings
     });
   } catch (e) {
     // Menu might not exist yet
@@ -1124,6 +1154,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 // noinspection JSDeprecatedSymbols
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabModes.delete(tabId);
+  tabAutomated.delete(tabId);
   debuggerAttached.delete(tabId); // Debugger auto-detaches on tab close
 });
 
