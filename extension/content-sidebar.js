@@ -279,9 +279,18 @@
     availabilityCheckTimer = setInterval(() => {
       elapsed += interval;
 
-      if (state.sidebar.mode === 'ignore' || state.sidebar.todoQueue.length === 0 || elapsed >= timeout) {
+      if (state.sidebar.mode === 'ignore' || state.sidebar.todoQueue.length === 0) {
         clearInterval(availabilityCheckTimer);
         availabilityCheckTimer = null;
+        return;
+      }
+
+      if (elapsed >= timeout) {
+        // Timed out — clear timer but re-attempt later instead of losing queued items
+        clearInterval(availabilityCheckTimer);
+        availabilityCheckTimer = null;
+        console.log('[Clanker:Sidebar] Availability check timed out, will retry in 30s');
+        setTimeout(attemptProcessing, 30000);
         return;
       }
 

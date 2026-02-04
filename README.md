@@ -43,3 +43,10 @@ Because Google uses the hideous abomination known as Angular, interaction with t
 Google Messages should only be active in a single tab (only one instance should connect to your phone on each computer, by design), but there may be some odd behaviors in the edge case if you have other copies open on other tabs or browser windows.
 
 If you see a problem, need help, or just have questions, please open a new [Issue](https://github.com/MV10/clanker/issues) (this requires a Github account).
+
+## LIABILITY DISCLAIMER
+
+Use at your own risk. I explicitly disclaim any responsibility for anything that happens as a result of your use of this extension. It's open source, at a minimum, look at content.js and read the system prompts that are sent to the AI which governs its behavior and responses. Use the Diagnostics menu to inspect the data it sends. You as the operator of this extension and the originator of the OpenAI API calls are responsible for anything your Clanker says and does. Probably. I'm not a lawyer and this is not legal advice.
+
+In particular, it wouldn't surprise me if Google or your phone carrier gets their panties in a wad. It is apparently A-OK for _them_ to
+allow half the planet to blast us with automated spam 24/7, but you and I are "little people", not even blips on the almighty Quarterly Earnings Report. I have no specific knowledge of any policies this violates. Google prohibits "interfering with SMS" but this isn't interference, it is participation via their own public interface. All activity is fully visible and disclosed to all participants. Similarly, I don't think it violates phone carriers "A2P 10DLC" registration requirements (Automation-to-Person, which are messages from those 10-digit numbers you see telling you that your Anthropic billing agreement has drained your checking account). This isn't sales, marketing, service notifications, or anything but simple entertainment delivered to specific private groups. But we walk in the shadows of humorless corporate behemoths. Buyer beware.

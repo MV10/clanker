@@ -81,10 +81,11 @@
       await handleConversationChange(conversationId);
       // Wait for messages to fully load before parsing
       setTimeout(() => {
+        // parseExistingConversation manages state.parseComplete itself
+        // (including during retry loops when messages haven't loaded yet)
         if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
           window.ClankerMessages.parseExistingConversation();
         }
-        state.parseComplete = true;           // Mark parse as complete
         state.conversationChanging = false;   // Re-enable message processing
       }, 500);
     }

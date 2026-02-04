@@ -76,6 +76,9 @@
    * Parse existing conversation history
    */
   function parseExistingConversation(retryCount = 0) {
+    // Own the parseComplete flag — stays false until we're truly done
+    state.parseComplete = false;
+
     // Use parser to get full conversation context
     state.conversation = Parser.parseConversation();
 
@@ -166,6 +169,9 @@
         console.log('[Clanker] Discarding deferred response — new messages arrived');
       }
     }
+
+    state.parseComplete = true;
+    console.log('[Clanker] Parse complete');
   }
 
   /**

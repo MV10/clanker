@@ -111,10 +111,11 @@
             // Wait a bit more for messages to load, then parse
             setTimeout(() => {
               // Call parseExistingConversation from content-messages module
+              // parseExistingConversation manages state.parseComplete itself
+              // (including during retry loops when messages haven't loaded yet)
               if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
                 window.ClankerMessages.parseExistingConversation();
               }
-              state.parseComplete = true;           // Mark parse as complete
               state.conversationChanging = false;   // Re-enable message processing
               isProcessingChange = false;
             }, 300);
