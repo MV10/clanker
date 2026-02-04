@@ -56,6 +56,7 @@ const MENU_IDS = {
   SEPARATOR2: 'clanker-separator2',
   DIAGNOSTICS: 'clanker-diagnostics',
   DIAG_LOG: 'clanker-diag-log',
+  DIAG_LOG_SANITIZED: 'clanker-diag-log-sanitized',
   DIAG_DEACTIVATE_ALL: 'clanker-diag-deactivate-all',
   DIAG_RESET_CONVERSATION: 'clanker-diag-reset-conversation',
   DIAG_RESET_ALL: 'clanker-diag-reset-all'
@@ -797,6 +798,66 @@ async function handleDiagLog(tabId) {
 }
 
 /**
+ * Show conversation state with sensitive data redacted for safe public sharing
+ */
+async function handleDiagLogSanitized(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_DIAGNOSTIC_STATE' });
+
+    if (!response?.success) {
+      console.error('[Clanker] Failed to get diagnostic state:', response?.error);
+      return;
+    }
+
+    const sanitized = sanitizeDiagnosticState(response);
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Clanker Diagnostic - Conversation State (Sanitized)</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+    h1 { color: #569cd6; }
+    h2 { color: #4ec9b0; margin-top: 30px; }
+    pre { background: #2d2d2d; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
+    .section { margin-bottom: 20px; }
+    .label { color: #9cdcfe; }
+    .value { color: #ce9178; }
+    .null { color: #808080; font-style: italic; }
+    .notice { background: #3a3d41; border-left: 4px solid #569cd6; padding: 10px 15px; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Clanker Diagnostic - Conversation State (Sanitized)</h1>
+  <p>Generated: ${new Date().toISOString()}</p>
+  <div class="notice">Participant names, message content, IDs, URLs, and other sensitive data have been redacted. This output is safe to share publicly for support purposes.</div>
+
+  <h2>Runtime State</h2>
+  <pre>${escapeHtml(JSON.stringify(sanitized.runtimeState, null, 2))}</pre>
+
+  <h2>Stored Mode</h2>
+  <pre>${escapeHtml(JSON.stringify(sanitized.storedMode, null, 2))}</pre>
+
+  <h2>Stored Summary</h2>
+  <pre>${sanitized.storedSummary ? escapeHtml(sanitized.storedSummary) : '<span class="null">null</span>'}</pre>
+
+  <h2>Stored Customization</h2>
+  <pre>${sanitized.storedCustomization ? escapeHtml(sanitized.storedCustomization) : '<span class="null">null</span>'}</pre>
+
+  <h2>Recent Messages (last 20)</h2>
+  <pre>${escapeHtml(JSON.stringify(sanitized.recentMessages, null, 2))}</pre>
+</body>
+</html>`;
+
+    const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+    chrome.tabs.create({ url: dataUrl });
+
+  } catch (error) {
+    console.error('[Clanker] Sanitized diagnostic log error:', error);
+  }
+}
+
+/**
  * Escape HTML for safe display
  */
 function escapeHtml(text) {
@@ -807,6 +868,143 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+/**
+ * Sanitize diagnostic state data for safe public sharing.
+ * Builds a consistent name mapping and applies it across all fields.
+ */
+function sanitizeDiagnosticState(data) {
+  const nameMap = new Map();
+  let userCounter = 0;
+  let phoneCounter = 0;
+
+  function getRedactedName(name) {
+    if (!name) return name;
+    if (name === 'You') return name; // Already anonymous, skip
+    if (nameMap.has(name)) return nameMap.get(name);
+
+    let redacted;
+    if (/^\d{10}$/.test(name)) {
+      phoneCounter++;
+      redacted = `(${String(phoneCounter).padStart(3, '0')}) XXX-XXXX`;
+    } else {
+      userCounter++;
+      redacted = `User${String(userCounter).padStart(3, '0')}`;
+    }
+    nameMap.set(name, redacted);
+    return redacted;
+  }
+
+  function redactText(text) {
+    if (!text || typeof text !== 'string') return text;
+    let result = text;
+    // Replace participant names in text (longer names first to avoid partial matches).
+    // Case-insensitive to catch informal casing in messages and summaries.
+    const sortedNames = [...nameMap.entries()].sort((a, b) => b[0].length - a[0].length);
+    for (const [original, redacted] of sortedNames) {
+      const escaped = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      result = result.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), redacted);
+    }
+    // Redact blob URIs: blob:https://.../<guid> → blob:https://redacted.com/XXXX
+    result = result.replace(/blob:https?:\/\/[^/]+\/[a-f0-9-]+/gi, 'blob:https://redacted.com/XXXX');
+    // Redact URLs with domains: https://domain.com/... → https://redacted.com/...
+    result = result.replace(/(https?:\/\/)([^/\s]+)/g, '$1redacted.com');
+    return result;
+  }
+
+  // First pass: collect ALL participant names before any redaction.
+  // This ensures redactText has the complete nameMap when replacing names in text.
+
+  // Header names, parsed participants, and LLM-view names from the conversation
+  if (data.allParticipantNames) {
+    for (const name of data.allParticipantNames) {
+      if (name) getRedactedName(name);
+    }
+  }
+
+  // Configured user name (what the LLM uses in summaries instead of "You")
+  if (data.configuredUserName) {
+    getRedactedName(data.configuredUserName);
+  }
+
+  // Message senders (may include names not in header, e.g. "You")
+  if (data.recentMessages) {
+    for (const msg of data.recentMessages) {
+      if (msg.sender) getRedactedName(msg.sender);
+    }
+  }
+  if (data.runtimeState?.lastProcessedMessage?.sender) {
+    getRedactedName(data.runtimeState.lastProcessedMessage.sender);
+  }
+  if (data.storedLastMessage?.sender) {
+    getRedactedName(data.storedLastMessage.sender);
+  }
+
+  // For multi-word names (e.g. "Josh Smith"), also register individual words
+  // so abbreviations or first-name-only references in summaries get redacted.
+  // Each sub-word maps to the same redacted label as the full name.
+  for (const [fullName, redacted] of [...nameMap.entries()]) {
+    const words = fullName.split(/\s+/).filter(w => w.length >= 2);
+    if (words.length > 1) {
+      for (const word of words) {
+        if (!nameMap.has(word)) {
+          nameMap.set(word, redacted);
+        }
+      }
+    }
+  }
+
+  // Deep clone to avoid modifying originals
+  const sanitized = JSON.parse(JSON.stringify(data));
+
+  // Sanitize runtimeState
+  if (sanitized.runtimeState) {
+    if (sanitized.runtimeState.conversationId) {
+      sanitized.runtimeState.conversationId = 'REDACTED';
+    }
+    if (sanitized.runtimeState.lastProcessedMessage) {
+      const lpm = sanitized.runtimeState.lastProcessedMessage;
+      if (lpm.sender) lpm.sender = getRedactedName(lpm.sender);
+      if (lpm.content) lpm.content = redactText(lpm.content);
+      if (lpm.id) lpm.id = 'REDACTED';
+    }
+  }
+
+  // Sanitize storedLastMessage
+  if (sanitized.storedLastMessage) {
+    const slm = sanitized.storedLastMessage;
+    if (slm.sender) slm.sender = getRedactedName(slm.sender);
+    if (slm.content) slm.content = redactText(slm.content);
+    if (slm.id) slm.id = 'REDACTED';
+  }
+
+  // Sanitize summary and customization
+  if (sanitized.storedSummary) {
+    sanitized.storedSummary = redactText(sanitized.storedSummary);
+  }
+  if (sanitized.storedCustomization) {
+    sanitized.storedCustomization = redactText(sanitized.storedCustomization);
+  }
+
+  // Sanitize recent messages
+  if (sanitized.recentMessages) {
+    for (const msg of sanitized.recentMessages) {
+      if (msg.sender) msg.sender = getRedactedName(msg.sender);
+      if (msg.content) msg.content = redactText(msg.content);
+      if (msg.id) msg.id = 'REDACTED';
+      if (msg.imageSrc) {
+        msg.imageSrc = msg.imageSrc.replace(/blob:https?:\/\/[^/]+\/[a-f0-9-]+/gi,
+          'blob:https://redacted.com/XXXX');
+      }
+    }
+  }
+
+  // Remove metadata fields that were only needed for building nameMap
+  delete sanitized.allParticipantNames;
+  delete sanitized.configuredUserName;
+
+  return sanitized;
 }
 
 /**
@@ -997,6 +1195,15 @@ function createContextMenu() {
       documentUrlPatterns: ['https://messages.google.com/*']
     });
 
+    // Diagnostic: Show conversation state (sanitized for sharing)
+    chrome.contextMenus.create({
+      id: MENU_IDS.DIAG_LOG_SANITIZED,
+      parentId: MENU_IDS.DIAGNOSTICS,
+      title: 'Show Conversation State (Sanitized)',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://messages.google.com/*']
+    });
+
     // Diagnostic: Deactivate in all conversations
     chrome.contextMenus.create({
       id: MENU_IDS.DIAG_DEACTIVATE_ALL,
@@ -1116,6 +1323,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     case MENU_IDS.DIAG_LOG:
       // Show conversation state in a new tab
       handleDiagLog(tab.id);
+      break;
+
+    case MENU_IDS.DIAG_LOG_SANITIZED:
+      // Show sanitized conversation state for safe public sharing
+      handleDiagLogSanitized(tab.id);
       break;
 
     case MENU_IDS.DIAG_DEACTIVATE_ALL:

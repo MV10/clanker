@@ -165,6 +165,23 @@
         timestamp: m.timestamp
       }));
 
+      // Collect all known participant names for sanitization support.
+      // Multiple sources are merged because the DOM may have unloaded older messages.
+      const headerNames = Parser.extractParticipantNames();
+      const freshParticipants = context.participants ? Array.from(context.participants) : [];
+      const stateParticipants = state.conversation?.participants
+        ? Array.from(state.conversation.participants) : [];
+      const configuredUserName = state.config?.userName || null;
+
+      // Merge all sources into a deduplicated list
+      const allRawNames = [...new Set([...headerNames, ...freshParticipants, ...stateParticipants])];
+
+      // Also build the LLM-view names (with "You" replaced by configured name).
+      // This is the exact name set the LLM uses when writing summaries.
+      const llmViewNames = configuredUserName
+        ? allRawNames.map(n => n === 'You' ? configuredUserName : n)
+        : allRawNames;
+
       return {
         success: true,
         runtimeState: {
@@ -180,7 +197,9 @@
         storedSummary: stored[summaryKey] || null,
         storedCustomization: stored[customizationKey] || null,
         storedLastMessage: stored[lastMessageKey] || null,
-        recentMessages
+        recentMessages,
+        allParticipantNames: [...new Set([...allRawNames, ...llmViewNames])],
+        configuredUserName
       };
     } catch (error) {
       return { success: false, error: error.message };

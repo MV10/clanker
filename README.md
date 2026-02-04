@@ -35,7 +35,7 @@ Once it is configured, these context menu options become available:
 * Available - the conversation is parsed locally, the AI replies only if addressed by name 
 * Active - the conversation is sent to the AI for processing for every response
 
-New conversations are always in Deactivated mode. It will remember which mode a conversation was in and restore it when the conversation is re-selected. There is an option in the Diagnostics sub-menu to instantly deactivate Clanker in all conversations. Only participants in the current active conversation will see a deactivation message.
+New conversations are always in Deactivated mode. It will remember which mode a conversation was in and restore it when the conversation is re-selected. If you have the extension icon visible in the browser toolbar, it is gray in Deactivated mode and shows bright colors on a red background when running in the current conversation. There is an option in the Diagnostics sub-menu to instantly deactivate Clanker in all conversations. Only participants in the current active conversation will see a deactivation message.
 
 Once Clanker is active in a conversation, any participant can address it by name by mentioning "Clanker" or "Clank" in their messages. The AI is instructed to _always_ respond when addressed by name, although some models may not reliably honor this. You can also give it specific directives, like, "Clank, talk like a pirate."
 
@@ -67,7 +67,7 @@ Because Google uses the hideous abomination known as Angular, interaction with t
 
 Google Messages should only be active in a single tab (only one instance should connect to your phone on each computer, by design), but there may be some odd behaviors in the edge case if you have other copies open on other tabs or browser windows.
 
-If you see a problem, need help, or just have questions, please open a new [Issue](https://github.com/MV10/clanker/issues) (this requires a Github account).
+If you see a problem, need help, or just have questions, please open a new [Issue](https://github.com/MV10/clanker/issues) (this requires a Github account). It might be helpful to include data about the conversation. The right-click context menu's Diagnostics section can display a page of "sanitized" data for this purpose (redacts participant names and URLs). Ensure nothing sensitive like account numbers is present, the extension can't recognize everything. Please paste this information into your Issue inside monspaced markdown code blocks (use triple-backticks on the lines before and after the data).
 
 ## LIABILITY DISCLAIMER
 
