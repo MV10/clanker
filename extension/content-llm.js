@@ -37,7 +37,10 @@
     const requestId = state.llmRequestId;
 
     state.pendingResponseMessageId = triggerMessage.id;
-    state.pendingResponseTimer = setTimeout(async () => {
+
+    const delay = state.responseDelayMinMs + Math.random() * (state.responseDelayMaxMs - state.responseDelayMinMs);
+
+    const attemptResponse = async () => {
       state.pendingResponseTimer = null;
       state.pendingResponseMessageId = null;
 
@@ -59,14 +62,19 @@
         return;
       }
 
-      // Check if another LLM request is already in flight
+      // If another LLM request is in flight, wait for it to complete.
+      // The retry timer is stored in pendingResponseTimer so cancelPendingResponse
+      // will clear it if a newer message arrives (newer message takes priority).
       if (state.llmInFlight) {
-        console.log('[Clanker] LLM request already in flight, skipping');
+        console.log('[Clanker] LLM request in flight, will retry after completion');
+        state.pendingResponseTimer = setTimeout(attemptResponse, 500);
         return;
       }
 
       await generateAndSendResponse(requestId);
-    }, state.responseDelayMs);
+    };
+
+    state.pendingResponseTimer = setTimeout(attemptResponse, delay);
 
     console.log('[Clanker] Scheduled response to message:', triggerMessage.id, '(request', requestId + ')');
   }
@@ -78,10 +86,17 @@
   async function generateAndSendResponse(requestId) {
     console.log('[Clanker] Generating LLM response (request', requestId + ')...');
 
+    // Capture origin conversation before async work (for deferred delivery on conversation switch)
+    const originConversationId = state.currentConversationId;
+
     // Mark request as in-flight
     state.llmInFlight = true;
+    if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
 
-    const { recentMessages, olderMessageCount } = buildConversationHistory();
+    // Fresh DOM parse — lastMessageId reflects actual current state, not the
+    // potentially stale state.conversation.messages from initial parse
+    const { recentMessages, olderMessageCount, lastMessageId } = buildConversationHistory();
+    const originLastMessageId = lastMessageId;
     const systemPrompt = buildSystemPrompt(olderMessageCount);
 
     console.log('[Clanker] Sending to LLM:', {
@@ -115,9 +130,26 @@
         response = await handleImageRequest(response.requestImage, recentMessages, systemPrompt);
       }
 
+      // LLM API call is complete — clear in-flight flag before delivery.
+      // sendMessage may wait for the user to finish typing, and we must not
+      // block new requests (via the llmInFlight retry loop) during that wait.
+      state.llmInFlight = false;
+      if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
+
       // Check if this request was superseded while waiting for LLM
       if (requestId !== state.llmRequestId) {
-        console.log('[Clanker] Request', requestId, 'superseded by', state.llmRequestId, '- discarding response');
+        console.log('[Clanker] Request', requestId, 'superseded by', state.llmRequestId);
+        // If conversation changed, defer the response for later delivery
+        if (originConversationId !== state.currentConversationId && response.success && response.content) {
+          state.deferredResponse = {
+            conversationId: originConversationId,
+            content: response.content,
+            summary: response.summary || null,
+            customization: response.customization,
+            lastMessageId: originLastMessageId
+          };
+          console.log('[Clanker] Response deferred for conversation:', originConversationId);
+        }
         return;
       }
 
@@ -125,7 +157,7 @@
         // LLM can return null response if it decides not to reply
         if (response.content) {
           if (window.ClankerMain && window.ClankerMain.sendMessage) {
-            window.ClankerMain.sendMessage(`[clanker] ${response.content}`);
+            await window.ClankerMain.sendMessage(`[clanker] ${response.content}`);
           }
         } else {
           console.log('[Clanker] LLM chose not to respond');
@@ -152,7 +184,8 @@
         window.ClankerMain.showNotification('Unable to reach the AI service. Check your connection.', 'error');
       }
     } finally {
-      // Always clear in-flight flag
+      // Safety net — normally cleared above after the API call completes,
+      // but ensure it's cleared on early returns and exceptions too
       state.llmInFlight = false;
     }
   }
@@ -302,6 +335,10 @@
     const context = Parser.parseConversation();
     const allMessages = context.messages;
 
+    // Track last message ID for deferred response matching
+    const lastMessageId = allMessages.length > 0
+      ? allMessages[allMessages.length - 1].id : null;
+
     // Get history size from config, fall back to default
     const historySize = state.config?.historySize || DEFAULT_HISTORY_SIZE;
 
@@ -361,7 +398,7 @@
       }
     }
 
-    return { recentMessages, olderMessageCount };
+    return { recentMessages, olderMessageCount, lastMessageId };
   }
 
   /**
@@ -408,6 +445,7 @@
       'You are Clanker (or Clank), an AI assistant participating in an SMS group chat via browser extension.',
       'Keep your responses brief and casual, matching the SMS chat style.',
       'Do not dominate the conversation. Only respond when appropriate.',
+      'FORMATTING: SMS does not support markdown or rich text. Use only plain text and emojis. Do not use asterisks for bold/italic, backticks for code, hash marks for headers, or any other markdown syntax.',
       `Current participants: ${participants}.`,
       `The local user (running this extension) is ${localUserName}. Messages from ${localUserName} are sent from this device.`,
       '',

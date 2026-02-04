@@ -77,6 +77,20 @@ input:focus {
   box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 4px 0;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
+
 .button-group {
   display: flex;
   gap: 8px;

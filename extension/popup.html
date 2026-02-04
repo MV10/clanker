@@ -40,6 +40,18 @@
         <label for="history-size">Message History Size (10 to 500, 50 recommended)</label>
         <input type="number" id="history-size" name="historySize"
                min="10" max="500" placeholder="20">
+
+        <label for="sidebar-mode">Inactive Conversation Response</label>
+        <select id="sidebar-mode" name="sidebarMode">
+          <option value="ignore">Ignore new messages</option>
+          <option value="process">Process new messages</option>
+          <option value="idle">Respond when idle (10min)</option>
+        </select>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="web-search" name="webSearch">
+          Allow web searches (probably not free)
+        </label>
       </fieldset>
 
       <div class="button-group">

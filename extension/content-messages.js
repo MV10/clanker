@@ -152,6 +152,20 @@
     if (messages.length > 0) {
       ConversationStorage.saveLastProcessedMessage(messages[messages.length - 1]);
     }
+
+    // Check for deferred LLM response from a previous visit to this conversation
+    if (state.deferredResponse &&
+        state.deferredResponse.conversationId === state.currentConversationId) {
+      const deferred = state.deferredResponse;
+      state.deferredResponse = null;
+      const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+      if (lastMsg && lastMsg.id === deferred.lastMessageId) {
+        console.log('[Clanker] Delivering deferred response for:', deferred.conversationId);
+        deliverDeferredResponse(deferred);
+      } else {
+        console.log('[Clanker] Discarding deferred response — new messages arrived');
+      }
+    }
   }
 
   /**
@@ -241,6 +255,7 @@
       state.conversation.participants.add(parsed.sender);
     }
     state.lastMessageTime = Date.now();
+    if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
 
     // Skip our own messages
     if (parsed.isClanker) return;
@@ -258,6 +273,24 @@
           window.ClankerLLM.scheduleResponse(parsed);
         }
       }
+    }
+  }
+
+  /**
+   * Deliver a deferred LLM response that was stored during a conversation switch
+   * @param {Object} deferred - The deferred response object
+   */
+  function deliverDeferredResponse(deferred) {
+    if (deferred.content) {
+      if (window.ClankerMain && window.ClankerMain.sendMessage) {
+        window.ClankerMain.sendMessage('[clanker] ' + deferred.content);
+      }
+    }
+    if (deferred.summary) {
+      ConversationStorage.saveConversationSummary(deferred.summary);
+    }
+    if (deferred.customization !== undefined) {
+      ConversationStorage.saveConversationCustomization(deferred.customization);
     }
   }
 

@@ -20,13 +20,15 @@
       "matches": ["https://messages.google.com/*"],
       "js": [
         "storage.js",
-        "parser.js",
+        "parser-chat.js",
+        "parser-sidebar.js",
         "content-state.js",
         "content-storage.js",
         "content-images.js",
         "content-observers.js",
         "content-messages.js",
         "content-llm.js",
+        "content-sidebar.js",
         "content-main.js"
       ],
       "css": ["content.css"]

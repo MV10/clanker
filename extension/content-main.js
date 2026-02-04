@@ -65,6 +65,10 @@
     setupMessageListener();
     Observers.setupVisibilityListener();
 
+    if (window.ClankerSidebar) {
+      window.ClankerSidebar.initialize();
+    }
+
     // If no conversation is active, wait for one to be selected
     if (!verification.hasActiveConversation) {
       console.log('[Clanker] No active conversation, waiting for selection');
@@ -379,10 +383,44 @@
   }
 
   /**
+   * Wait until the message input field is empty (user finished typing).
+   * Polls every 500ms, gives up after timeoutMs.
+   * @param {number} timeoutMs
+   * @returns {Promise<boolean>} true if input cleared, false if timed out
+   */
+  function waitForInputClear(timeoutMs = 60000) {
+    if (!window.ClankerMessages || !window.ClankerMessages.isUserTyping()) {
+      return Promise.resolve(true);
+    }
+    console.log('[Clanker] User is typing, waiting for input to clear before sending');
+    return new Promise(resolve => {
+      let elapsed = 0;
+      const interval = 500;
+      const timer = setInterval(() => {
+        elapsed += interval;
+        if (!window.ClankerMessages.isUserTyping()) {
+          clearInterval(timer);
+          console.log('[Clanker] Input cleared, proceeding with send');
+          resolve(true);
+        } else if (elapsed >= timeoutMs) {
+          clearInterval(timer);
+          console.warn('[Clanker] Timed out waiting for input to clear, sending anyway');
+          resolve(false);
+        }
+      }, interval);
+    });
+  }
+
+  /**
    * Send a message using main world injection via background script
-   * This ensures Angular recognizes the input and click
+   * This ensures Angular recognizes the input and click.
+   * If the user is typing, waits for the input field to clear first
+   * to avoid destroying their in-progress text.
    */
   async function sendMessage(text) {
+    // Wait for the user to finish typing before injecting into the input field
+    await waitForInputClear();
+
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'SEND_CHAT_MESSAGE',
