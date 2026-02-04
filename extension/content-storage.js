@@ -146,6 +146,48 @@
   }
 
   /**
+   * Load conversation profiles from storage
+   */
+  async function loadConversationProfiles() {
+    if (!state.currentConversationId) return;
+
+    try {
+      const key = `profiles_${state.currentConversationId}`;
+      const result = await Storage.get(key);
+      state.conversationProfiles = result[key] || null;
+
+      if (state.conversationProfiles) {
+        console.log('[Clanker] Loaded conversation profiles');
+      }
+    } catch (error) {
+      console.warn('[Clanker] Failed to load conversation profiles:', error);
+    }
+  }
+
+  /**
+   * Save conversation profiles to storage
+   * @param {Object} profiles - Participant profiles object keyed by name
+   */
+  async function saveConversationProfiles(profiles) {
+    if (!state.currentConversationId) return;
+
+    try {
+      const key = `profiles_${state.currentConversationId}`;
+      if (profiles && Object.keys(profiles).length > 0) {
+        await Storage.set({ [key]: profiles });
+        state.conversationProfiles = profiles;
+        console.log('[Clanker] Saved conversation profiles');
+      } else {
+        await Storage.remove(key);
+        state.conversationProfiles = null;
+        console.log('[Clanker] Cleared conversation profiles');
+      }
+    } catch (error) {
+      console.warn('[Clanker] Failed to save conversation profiles:', error);
+    }
+  }
+
+  /**
    * Load last processed message from storage
    */
   async function loadLastProcessedMessage() {
@@ -195,6 +237,8 @@
     saveConversationMode,
     loadConversationCustomization,
     saveConversationCustomization,
+    loadConversationProfiles,
+    saveConversationProfiles,
     loadLastProcessedMessage,
     saveLastProcessedMessage
   };

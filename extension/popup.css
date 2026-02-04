@@ -198,6 +198,22 @@ input[type="number"] {
   color: #333;
 }
 
+.inline-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-inputs input[type="number"] {
+  flex: 1;
+}
+
+.inline-separator {
+  color: #666;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
 @media (prefers-color-scheme: dark) {
   body {
     color: #d4d4d4;
@@ -284,6 +300,10 @@ input[type="number"] {
   }
 
   .status-indicator .text {
+    color: #999;
+  }
+
+  .inline-separator {
     color: #999;
   }
 }

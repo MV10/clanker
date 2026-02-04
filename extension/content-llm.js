@@ -113,7 +113,8 @@
           messages: recentMessages,
           systemPrompt,
           summary: state.conversationSummary,
-          customization: state.conversationCustomization
+          customization: state.conversationCustomization,
+          profiles: state.conversationProfiles
         }
       });
 
@@ -146,6 +147,7 @@
             content: response.content,
             summary: response.summary || null,
             customization: response.customization,
+            profiles: response.profiles,
             lastMessageId: originLastMessageId
           };
           console.log('[Clanker] Response deferred for conversation:', originConversationId);
@@ -154,6 +156,9 @@
       }
 
       if (response.success) {
+        // Reset consecutive error counter on success
+        state.consecutiveErrors = 0;
+
         // LLM can return null response if it decides not to reply
         if (response.content) {
           if (window.ClankerMain && window.ClankerMain.sendMessage) {
@@ -172,21 +177,62 @@
         if (response.customization !== undefined) {
           await ConversationStorage.saveConversationCustomization(response.customization);
         }
-      } else {
-        console.error('[Clanker] LLM request failed:', response.error);
-        if (window.ClankerMain && window.ClankerMain.showNotification) {
-          window.ClankerMain.showNotification(`Failed to get response: ${response.error}`, 'error');
+
+        // Save updated profiles if provided
+        if (response.profiles !== undefined) {
+          await ConversationStorage.saveConversationProfiles(response.profiles);
         }
+      } else {
+        handleLLMError(response.error, response.errorCategory);
       }
     } catch (error) {
       console.error('[Clanker] Failed to get LLM response:', error);
-      if (window.ClankerMain && window.ClankerMain.showNotification) {
-        window.ClankerMain.showNotification('Unable to reach the AI service. Check your connection.', 'error');
-      }
+      handleLLMError('Unable to reach the AI service. Check your connection.', 'network');
     } finally {
       // Safety net — normally cleared above after the API call completes,
       // but ensure it's cleared on early returns and exceptions too
       state.llmInFlight = false;
+    }
+  }
+
+  /**
+   * Handle LLM API errors based on category.
+   * - quota/auth: auto-deactivate to stop wasting requests
+   * - rate_limit: log only (transient, next message will retry)
+   * - server/network: show notification on first occurrence, suppress repeats
+   * - model/unknown: always show notification
+   * @param {string} errorMessage - Human-readable error message
+   * @param {string} category - Error category from background script
+   */
+  function handleLLMError(errorMessage, category) {
+    state.consecutiveErrors++;
+    console.error('[Clanker] LLM error (category:', category + ', consecutive:', state.consecutiveErrors + '):', errorMessage);
+
+    if (category === 'quota' || category === 'auth') {
+      // Fatal for this session — auto-deactivate to stop burning requests.
+      // Set mode directly instead of going through handleModeChange, because
+      // that would try to send a deactivation SMS (which would also fail).
+      state.mode = MODES.DEACTIVATED;
+      cancelPendingResponse();
+      ConversationStorage.saveConversationMode(MODES.DEACTIVATED);
+      chrome.runtime.sendMessage({ type: 'SET_MODE', mode: MODES.DEACTIVATED }).catch(() => {});
+      if (window.ClankerMain) {
+        window.ClankerMain.showWarning(errorMessage + ' Clanker has been deactivated.');
+      }
+      state.consecutiveErrors = 0;
+    } else if (category === 'rate_limit') {
+      // Transient — just log, next scheduled response will retry naturally
+      console.log('[Clanker] Rate limited, will retry on next message');
+    } else if (category === 'server' || category === 'network') {
+      // Transient — show notification only on first occurrence to avoid spam
+      if (state.consecutiveErrors <= 1 && window.ClankerMain) {
+        window.ClankerMain.showNotification(errorMessage, 'error');
+      }
+    } else {
+      // model, unknown — always show
+      if (window.ClankerMain) {
+        window.ClankerMain.showNotification(errorMessage, 'error');
+      }
     }
   }
 
@@ -226,7 +272,8 @@
           messages: recentMessages,
           systemPrompt,
           summary: state.conversationSummary,
-          customization: state.conversationCustomization
+          customization: state.conversationCustomization,
+          profiles: state.conversationProfiles
         }
       });
 
@@ -244,17 +291,25 @@
         !response.requestImage;
 
       if (hasValidMessage) {
+        state.consecutiveErrors = 0;
+
         if (window.ClankerMain && window.ClankerMain.sendMessage) {
           window.ClankerMain.sendMessage(`[clanker] ${response.content}`);
         }
 
-        // Save any summary/customization updates
+        // Save any summary/customization/profile updates
         if (response.summary) {
           await ConversationStorage.saveConversationSummary(response.summary);
         }
         if (response.customization !== undefined) {
           await ConversationStorage.saveConversationCustomization(response.customization);
         }
+        if (response.profiles !== undefined) {
+          await ConversationStorage.saveConversationProfiles(response.profiles);
+        }
+      } else if (!response.success && (response.errorCategory === 'quota' || response.errorCategory === 'auth')) {
+        // Fatal API error during activation — deactivate instead of sending fallback
+        handleLLMError(response.error, response.errorCategory);
       } else {
         // Fallback if LLM didn't return a proper message
         if (window.ClankerMain && window.ClankerMain.sendMessage) {
@@ -456,10 +511,20 @@
       `Current participants: ${participants}.`,
       `The local user (running this extension) is ${localUserName}. Messages from ${localUserName} are sent from this device.`,
       '',
+      'MULTIPLE CLANKERS: Other participants may also run this extension. In the message history,',
+      'messages with the [clanker] prefix belong to the participant whose name appears as the sender.',
+      `For example, a [clanker] message from ${localUserName} was sent by THIS instance (you),`,
+      'but a [clanker] message from another participant was sent by THEIR Clanker instance (a different LLM).',
+      `To address another user\'s Clanker, say "${participants.split(', ').find(p => p !== localUserName) || 'Alice'}\'s Clanker".`,
+      `References to "${localUserName}\'s Clanker" mean you (this instance).`,
+      'If someone says "Clanker" without specifying whose, check whether another Clanker is already responding.',
+      'If so, let them continue unless you have something distinct to add. Any Clanker may respond at any time.',
+      '',
       'RESPONSE FORMAT: You must respond with valid JSON containing:',
       '- "response": Your chat message, or null if you choose not to respond. Do NOT include the [clanker] prefix.',
       '- "summary": Updated conversation summary (optional, include when useful).',
       '- "customization": Updated persona/style directive (optional, see CUSTOMIZATION below).',
+      '- "profiles": Updated participant profiles object (optional, see PARTICIPANT PROFILES below).',
       '',
       'SUMMARIZATION: To manage context size, you receive a summary of older messages plus recent literal messages.',
       `There are ${olderMessageCount} older messages not shown (covered by the summary if one exists).`,
@@ -490,6 +555,19 @@
       'Only request one image at a time. Only request when the image content is relevant.',
       'When you view an image, consider adding a brief description to the summary for future context.',
       '',
+      'PARTICIPANT PROFILES: You maintain notes about each participant, tracking their interests, opinions,',
+      'preferences, and relevant personal details mentioned in conversation.',
+      'Profiles are provided as a JSON object keyed by participant name.',
+      'When to update profiles:',
+      '- When a participant reveals interests, hobbies, or preferences',
+      '- When opinions or stances on topics are expressed',
+      '- When personal details are mentioned (job, location, family, etc.)',
+      '- When you learn something new that would help you engage naturally',
+      'Return updated profiles in your response as "profiles": {name: "notes", ...}.',
+      'Include all existing profiles in your update, not just changed ones, as the entire object is replaced.',
+      'If no changes are needed, omit the "profiles" field entirely.',
+      'Use profile information to personalize responses and show genuine awareness of each person.',
+      '',
       'CUSTOMIZATION: Users may request changes to your behavior (e.g., "Clanker, talk like a pirate").',
       'You manage these customizations by returning a "customization" field in your response.',
       'Store the directive as a brief instruction to yourself (e.g., "Speak in pirate dialect").',
@@ -502,14 +580,176 @@
       '- Return {"customization": null} to clear a previous customization',
       '- Customizations persist across messages until changed or cleared',
       '',
-      'Example responses with summaries:',
+      'Example responses:',
       '{"response": "Sounds good!", "summary": "Planning dinner Friday. Mom prefers Italian."}',
       '{"response": null, "summary": "Group decided on Friday 7pm at Olive Garden."}',
       '{"requestImage": "blob:https://messages.google.com/abc123-def456"}',
-      '{"response": "Arrr, I be Clanker now, matey!", "customization": "Speak in pirate dialect."}'
+      '{"response": "Arrr, I be Clanker now, matey!", "customization": "Speak in pirate dialect."}',
+      '{"response": "Nice, I remember you mentioned wanting to try that place!", "profiles": {"Alice": "Enjoys hiking and Italian food. Works in marketing.", "Bob": "Software engineer. Prefers Mexican cuisine."}}'
     ];
 
     return parts.join('\n');
+  }
+
+  // ---- Idle-time News Search ----
+
+  const NEWS_IDLE_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+  const NEWS_CHECK_INTERVAL_MS = 60 * 60 * 1000;     // 1 hour
+
+  /**
+   * Start or restart the idle news check timer.
+   * Called when mode changes or config is loaded.
+   */
+  function startNewsTimer() {
+    stopNewsTimer();
+
+    if (!state.config?.newsSearch) return;
+    if (state.mode !== MODES.ACTIVE && state.mode !== MODES.AVAILABLE) return;
+
+    // Check every 5 minutes whether the idle + interval conditions are met
+    state.newsCheckTimer = setInterval(checkNewsConditions, 5 * 60 * 1000);
+    console.log('[Clanker] News timer started');
+  }
+
+  /**
+   * Stop the idle news check timer
+   */
+  function stopNewsTimer() {
+    if (state.newsCheckTimer) {
+      clearInterval(state.newsCheckTimer);
+      state.newsCheckTimer = null;
+    }
+  }
+
+  /**
+   * Check whether conditions are met for a news search:
+   * 1. News search enabled in config
+   * 2. Mode is active or available
+   * 3. Not in quiet hours
+   * 4. Conversation idle for >= 2 hours
+   * 5. At least 1 hour since last news check
+   * 6. No LLM request in flight
+   */
+  function checkNewsConditions() {
+    if (!state.config?.newsSearch) return;
+    if (state.mode !== MODES.ACTIVE && state.mode !== MODES.AVAILABLE) return;
+    if (state.llmInFlight) return;
+
+    const now = Date.now();
+
+    // Check quiet hours
+    if (isInQuietHours()) {
+      return;
+    }
+
+    // Check conversation idle time (lastMessageTime tracks most recent activity)
+    const idleTime = now - (state.lastMessageTime || 0);
+    if (idleTime < NEWS_IDLE_THRESHOLD_MS) return;
+
+    // Check interval since last news check
+    if (state.lastNewsCheckTime && (now - state.lastNewsCheckTime) < NEWS_CHECK_INTERVAL_MS) return;
+
+    console.log('[Clanker] News check conditions met, triggering search');
+    state.lastNewsCheckTime = now;
+    triggerNewsSearch();
+  }
+
+  /**
+   * Check if current time is within configured quiet hours.
+   * Handles wrap-around (e.g. 21:00 to 09:00).
+   */
+  function isInQuietHours() {
+    const start = state.config?.newsQuietStart ?? 21;
+    const stop = state.config?.newsQuietStop ?? 9;
+    const hour = new Date().getHours();
+
+    if (start === stop) return false; // No quiet period
+    if (start < stop) {
+      // Simple range, e.g. 9 to 17
+      return hour >= start && hour < stop;
+    } else {
+      // Wraps midnight, e.g. 21 to 9
+      return hour >= start || hour < stop;
+    }
+  }
+
+  /**
+   * Trigger a news search via the LLM.
+   * Uses a special system prompt instructing the LLM to search for interesting news
+   * relevant to conversation participants.
+   */
+  async function triggerNewsSearch() {
+    if (state.llmInFlight) return;
+
+    state.llmRequestId++;
+    const requestId = state.llmRequestId;
+    state.llmInFlight = true;
+    if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
+
+    const maxSearches = state.config?.newsMaxSearches || 10;
+
+    // Build a minimal context for the LLM
+    const { recentMessages, olderMessageCount } = buildConversationHistory();
+    const basePrompt = buildSystemPrompt(olderMessageCount);
+
+    const newsPrompt = basePrompt + '\n\n' +
+      'SPECIAL INSTRUCTION: The conversation has been idle. ' +
+      'Search the web for recent news or events that would be genuinely interesting to the participants. ' +
+      'Consider their interests, ongoing conversation topics, and profile notes. ' +
+      `You may perform up to ${maxSearches} web searches. ` +
+      'IMPORTANT: Only comment if you find something truly remarkable, unusual, or highly relevant. ' +
+      'Ignore routine news, scheduled events, minor updates, casual relevance, and low-interest content. ' +
+      'If nothing meets this high bar, return {"response": null}. ' +
+      'Do NOT force a response just because you searched. Most checks should result in null. ' +
+      'If you do respond, keep it natural and conversational, as if you just noticed something interesting.';
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'SEND_TO_LLM',
+        payload: {
+          messages: recentMessages,
+          systemPrompt: newsPrompt,
+          summary: state.conversationSummary,
+          customization: state.conversationCustomization,
+          profiles: state.conversationProfiles
+        }
+      });
+
+      state.llmInFlight = false;
+      if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
+
+      if (requestId !== state.llmRequestId) {
+        console.log('[Clanker] News search request superseded');
+        return;
+      }
+
+      if (response.success) {
+        state.consecutiveErrors = 0;
+
+        if (response.content) {
+          console.log('[Clanker] News search produced a response');
+          if (window.ClankerMain && window.ClankerMain.sendMessage) {
+            await window.ClankerMain.sendMessage(`[clanker] ${response.content}`);
+          }
+        } else {
+          console.log('[Clanker] News search found nothing noteworthy');
+        }
+
+        if (response.summary) {
+          await ConversationStorage.saveConversationSummary(response.summary);
+        }
+        if (response.profiles !== undefined) {
+          await ConversationStorage.saveConversationProfiles(response.profiles);
+        }
+      } else {
+        handleLLMError(response.error, response.errorCategory);
+      }
+    } catch (error) {
+      console.error('[Clanker] News search failed:', error);
+      handleLLMError('News search failed. Check your connection.', 'network');
+    } finally {
+      state.llmInFlight = false;
+    }
   }
 
   // Export to window for use by other content modules
@@ -519,10 +759,13 @@
     generateAndSendResponse,
     generateActivationMessage,
     handleImageRequest,
+    handleLLMError,
     buildConversationHistory,
     buildSystemPrompt,
     getLocalUserName,
-    replaceLocalUserReferences
+    replaceLocalUserReferences,
+    startNewsTimer,
+    stopNewsTimer
   };
 
 })();

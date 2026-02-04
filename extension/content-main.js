@@ -149,9 +149,10 @@
       const modeKey = `mode_${state.currentConversationId}`;
       const summaryKey = `summary_${state.currentConversationId}`;
       const customizationKey = `customization_${state.currentConversationId}`;
+      const profilesKey = `profiles_${state.currentConversationId}`;
       const lastMessageKey = `lastMessage_${state.currentConversationId}`;
 
-      const stored = await Storage.get([modeKey, summaryKey, customizationKey, lastMessageKey]);
+      const stored = await Storage.get([modeKey, summaryKey, customizationKey, profilesKey, lastMessageKey]);
 
       // Get recent messages from parser (images are now included in messages array)
       const context = Parser.parseConversation();
@@ -196,6 +197,7 @@
         storedMode: stored[modeKey] || null,
         storedSummary: stored[summaryKey] || null,
         storedCustomization: stored[customizationKey] || null,
+        storedProfiles: stored[profilesKey] || null,
         storedLastMessage: stored[lastMessageKey] || null,
         recentMessages,
         allParticipantNames: [...new Set([...allRawNames, ...llmViewNames])],
@@ -219,12 +221,14 @@
       const modeKey = `mode_${state.currentConversationId}`;
       const summaryKey = `summary_${state.currentConversationId}`;
       const customizationKey = `customization_${state.currentConversationId}`;
+      const profilesKey = `profiles_${state.currentConversationId}`;
       const imageCacheKey = `image_cache_${state.currentConversationId}`;
       const lastMessageKey = `lastMessage_${state.currentConversationId}`;
 
       await Storage.remove(modeKey);
       await Storage.remove(summaryKey);
       await Storage.remove(customizationKey);
+      await Storage.remove(profilesKey);
       await Storage.remove(imageCacheKey);
       await Storage.remove(lastMessageKey);
 
@@ -232,6 +236,7 @@
       state.mode = MODES.DEACTIVATED;
       state.conversationSummary = null;
       state.conversationCustomization = null;
+      state.conversationProfiles = null;
       state.lastProcessedMessage = null;
       state.processedMessageIds.clear();
       LLM.cancelPendingResponse();
@@ -262,6 +267,7 @@
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
+      state.conversationProfiles = null;
       state.lastProcessedMessage = null;
       state.processedMessageIds.clear();
       state.currentConversationId = null;
@@ -309,6 +315,7 @@
     // Cancel any pending response when deactivating
     if (newMode === MODES.DEACTIVATED) {
       LLM.cancelPendingResponse();
+      LLM.stopNewsTimer();
     }
 
     // Insert mode change messages into the conversation (no popup notifications for these)
@@ -319,9 +326,11 @@
     } else if (newMode === MODES.ACTIVE) {
       // Any mode -> Active: LLM generates activation message
       LLM.generateActivationMessage();
+      LLM.startNewsTimer();
     } else if (newMode === MODES.AVAILABLE) {
       // Any mode -> Available: static message
       sendMessage('[clanker] AI is available but will only reply if you address it directly by name.');
+      LLM.startNewsTimer();
     }
   }
 
@@ -334,6 +343,7 @@
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
+      state.conversationProfiles = null;
       state.lastProcessedMessage = null;
       state.processedMessageIds.clear();
       LLM.cancelPendingResponse();
@@ -341,16 +351,20 @@
 
     state.currentConversationId = newConversationId;
 
-    // Load stored mode, summary, customization, and last message for this conversation
+    // Load stored mode, summary, customization, profiles, and last message for this conversation
     try {
       await ConversationStorage.loadConversationMode(showNotification);
       await ConversationStorage.loadConversationSummary();
       await ConversationStorage.loadConversationCustomization();
+      await ConversationStorage.loadConversationProfiles();
       await ConversationStorage.loadLastProcessedMessage();
     } catch (e) {
       // Storage may fail if extension context invalidated
       console.warn('[Clanker] Could not load conversation data');
     }
+
+    // Start news timer if mode is active/available (restoring from stored mode)
+    LLM.startNewsTimer();
   }
 
   /**

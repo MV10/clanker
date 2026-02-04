@@ -26,6 +26,7 @@
     conversation: null,     // Current ConversationContext from parser
     conversationSummary: null, // LLM-generated summary of older messages
     conversationCustomization: null, // LLM-managed persona/style customization
+    conversationProfiles: null,      // LLM-managed participant profiles (JSON object keyed by name)
     processedMessageIds: new Set(),
     lastMessageTime: 0,
     userTyping: false,
@@ -46,6 +47,11 @@
     lastProcessedMessage: null,
     // Deferred LLM response (stored when conversation changes mid-request)
     deferredResponse: null,
+    // Consecutive LLM error tracking (to avoid spamming notifications)
+    consecutiveErrors: 0,
+    // Idle-time news search timer
+    newsCheckTimer: null,
+    lastNewsCheckTime: 0,
     // Sidebar conversation monitoring
     sidebar: {
       mode: 'ignore',

@@ -13,7 +13,11 @@ const STORAGE_KEYS = {
   USER_NAME: 'userName',
   HISTORY_SIZE: 'historySize',
   SIDEBAR_MODE: 'sidebarMode',
-  WEB_SEARCH: 'webSearch'
+  WEB_SEARCH: 'webSearch',
+  NEWS_SEARCH: 'newsSearch',
+  NEWS_MAX_SEARCHES: 'newsMaxSearches',
+  NEWS_QUIET_START: 'newsQuietStart',
+  NEWS_QUIET_STOP: 'newsQuietStop'
 };
 
 /**
@@ -28,6 +32,10 @@ const elements = {
   historySize: document.getElementById('history-size'),
   sidebarMode: document.getElementById('sidebar-mode'),
   webSearch: document.getElementById('web-search'),
+  newsSearch: document.getElementById('news-search'),
+  newsMaxSearches: document.getElementById('news-max-searches'),
+  newsQuietStart: document.getElementById('news-quiet-start'),
+  newsQuietStop: document.getElementById('news-quiet-stop'),
   saveBtn: document.getElementById('save-btn'),
   testBtn: document.getElementById('test-btn'),
   statusBanner: document.getElementById('status-banner'),
@@ -60,6 +68,16 @@ async function loadSettings() {
       elements.sidebarMode.value = result[STORAGE_KEYS.SIDEBAR_MODE];
     }
     elements.webSearch.checked = !!result[STORAGE_KEYS.WEB_SEARCH];
+    elements.newsSearch.checked = !!result[STORAGE_KEYS.NEWS_SEARCH];
+    if (result[STORAGE_KEYS.NEWS_MAX_SEARCHES] !== undefined) {
+      elements.newsMaxSearches.value = result[STORAGE_KEYS.NEWS_MAX_SEARCHES];
+    }
+    if (result[STORAGE_KEYS.NEWS_QUIET_START] !== undefined) {
+      elements.newsQuietStart.value = result[STORAGE_KEYS.NEWS_QUIET_START];
+    }
+    if (result[STORAGE_KEYS.NEWS_QUIET_STOP] !== undefined) {
+      elements.newsQuietStop.value = result[STORAGE_KEYS.NEWS_QUIET_STOP];
+    }
 
     updateConnectionStatus();
   } catch (error) {
@@ -123,6 +141,10 @@ async function saveSettings(event) {
   const historySize = parseInt(elements.historySize.value, 10) || 20;
   const sidebarMode = elements.sidebarMode.value;
   const webSearch = elements.webSearch.checked;
+  const newsSearch = elements.newsSearch.checked;
+  const newsMaxSearches = Math.max(1, Math.min(100, parseInt(elements.newsMaxSearches.value, 10) || 10));
+  const newsQuietStart = Math.max(0, Math.min(23, parseInt(elements.newsQuietStart.value, 10) || 21));
+  const newsQuietStop = Math.max(0, Math.min(23, parseInt(elements.newsQuietStop.value, 10) || 9));
 
   // Validate endpoint URL
   const validation = validateEndpoint(endpoint);
@@ -145,7 +167,11 @@ async function saveSettings(event) {
     [STORAGE_KEYS.USER_NAME]: userName,
     [STORAGE_KEYS.HISTORY_SIZE]: clampedHistorySize,
     [STORAGE_KEYS.SIDEBAR_MODE]: sidebarMode,
-    [STORAGE_KEYS.WEB_SEARCH]: webSearch
+    [STORAGE_KEYS.WEB_SEARCH]: webSearch,
+    [STORAGE_KEYS.NEWS_SEARCH]: newsSearch,
+    [STORAGE_KEYS.NEWS_MAX_SEARCHES]: newsMaxSearches,
+    [STORAGE_KEYS.NEWS_QUIET_START]: newsQuietStart,
+    [STORAGE_KEYS.NEWS_QUIET_STOP]: newsQuietStop
   };
 
   try {

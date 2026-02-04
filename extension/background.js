@@ -14,7 +14,11 @@ const STORAGE_KEYS = {
   USER_NAME: 'userName',
   HISTORY_SIZE: 'historySize',
   SIDEBAR_MODE: 'sidebarMode',
-  WEB_SEARCH: 'webSearch'
+  WEB_SEARCH: 'webSearch',
+  NEWS_SEARCH: 'newsSearch',
+  NEWS_MAX_SEARCHES: 'newsMaxSearches',
+  NEWS_QUIET_START: 'newsQuietStart',
+  NEWS_QUIET_STOP: 'newsQuietStop'
 };
 
 /**
@@ -162,10 +166,8 @@ async function handleTestConnection({ endpoint, apiKey, model }) {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      return {
-        success: false,
-        error: errorData.error?.message || `HTTP ${response.status}`
-      };
+      const classified = classifyApiError(response.status, errorData);
+      return { success: false, error: classified.error };
     }
 
     return { success: true };
@@ -299,14 +301,74 @@ function extractResponseContent(data, provider, webSearch) {
 }
 
 /**
+ * Classify an API HTTP error into a category with a human-readable message.
+ * Categories: 'auth', 'quota', 'rate_limit', 'model', 'server', 'unknown'
+ * @param {number} status - HTTP status code
+ * @param {Object} errorData - Parsed error response body
+ * @returns {Object} {success: false, error: string, errorCategory: string}
+ */
+function classifyApiError(status, errorData) {
+  const apiMessage = errorData.error?.message || '';
+  const errorType = (errorData.error?.type || '').toLowerCase();
+  const errorCode = (errorData.error?.code || '').toLowerCase();
+
+  // Check for quota/billing indicators in the error body (providers vary)
+  const isQuotaError = /quota|billing|budget|insufficient.funds|exceeded.*limit|payment.*required/i.test(apiMessage) ||
+    /quota|billing|budget|insufficient/i.test(errorType) ||
+    /quota|billing|budget|insufficient/i.test(errorCode);
+
+  let category, message;
+
+  switch (status) {
+    case 401:
+      category = 'auth';
+      message = 'Invalid API key. Check your configuration.';
+      break;
+    case 402:
+      category = 'quota';
+      message = 'Payment required. Your API billing may need attention.';
+      break;
+    case 403:
+      category = isQuotaError ? 'quota' : 'auth';
+      message = isQuotaError
+        ? 'API quota exceeded. Check your billing or usage limits.'
+        : 'Access denied. Check your API key permissions.';
+      break;
+    case 404:
+      category = 'model';
+      message = 'Model or endpoint not found. Check your configuration.';
+      break;
+    case 429:
+      // 429 can be rate limit (transient) or quota exhaustion (persistent)
+      category = isQuotaError ? 'quota' : 'rate_limit';
+      message = isQuotaError
+        ? 'API quota exhausted. Check your billing or usage limits.'
+        : 'Rate limited. Too many requests — will retry automatically.';
+      break;
+    case 500:
+    case 502:
+    case 503:
+      category = 'server';
+      message = `API server error (${status}). This is usually temporary.`;
+      break;
+    default:
+      category = 'unknown';
+      message = apiMessage || `HTTP ${status}`;
+  }
+
+  return { success: false, error: message, errorCategory: category };
+}
+
+/**
  * Send conversation to LLM and get response
  */
-async function handleLLMRequest({ messages, systemPrompt, summary, customization, imageData }) {
+async function handleLLMRequest({ messages, systemPrompt, summary, customization, profiles, imageData }) {
   console.log('[Clanker] handleLLMRequest called:', {
     messageCount: messages?.length,
     hasSystemPrompt: !!systemPrompt,
     hasSummary: !!summary,
     hasCustomization: !!customization,
+    hasProfiles: !!profiles,
     hasImageData: !!imageData
   });
 
@@ -337,6 +399,14 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
       apiMessages.push({
         role: 'system',
         content: `[ACTIVE CUSTOMIZATION]\n${customization}`
+      });
+    }
+
+    // Add participant profiles if available
+    if (profiles && typeof profiles === 'object' && Object.keys(profiles).length > 0) {
+      apiMessages.push({
+        role: 'system',
+        content: `[PARTICIPANT PROFILES]\n${JSON.stringify(profiles)}`
       });
     }
 
@@ -394,10 +464,7 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       console.error('[Clanker] API error:', errorData);
-      return {
-        success: false,
-        error: errorData.error?.message || `HTTP ${response.status}`
-      };
+      return classifyApiError(response.status, errorData);
     }
 
     const data = await response.json();
@@ -416,14 +483,15 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
       content: parsed.response,
       summary: parsed.summary || null,
       requestImage: parsed.requestImage || null,
-      customization: parsed.customization
+      customization: parsed.customization,
+      profiles: parsed.profiles
     };
   } catch (error) {
     // Provide more specific error messages for common failures
     if (error.name === 'TypeError' && error.message.includes('fetch')) {
-      return { success: false, error: 'Network error - check your connection' };
+      return { success: false, error: 'Network error — check your connection.', errorCategory: 'network' };
     }
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, errorCategory: 'unknown' };
   }
 }
 
@@ -453,14 +521,16 @@ function parseLLMResponse(content) {
     const hasRequestImage = typeof parsed.requestImage === 'string';
     const hasSummary = typeof parsed.summary === 'string';
     const hasCustomization = 'customization' in parsed;
+    const hasProfiles = 'profiles' in parsed && typeof parsed.profiles === 'object';
 
     // Accept if it has any of the expected fields
-    if (hasResponse || hasRequestImage || hasSummary || hasCustomization) {
+    if (hasResponse || hasRequestImage || hasSummary || hasCustomization || hasProfiles) {
       return {
         response: hasResponse ? parsed.response : null,
         summary: hasSummary ? parsed.summary : null,
         requestImage: hasRequestImage ? parsed.requestImage : null,
-        customization: hasCustomization ? parsed.customization : undefined
+        customization: hasCustomization ? parsed.customization : undefined,
+        profiles: hasProfiles ? parsed.profiles : undefined
       };
     }
   } catch (e) {
@@ -616,7 +686,11 @@ async function handleGetConfig() {
                         config[STORAGE_KEYS.MODEL]),
         userName: config[STORAGE_KEYS.USER_NAME] || null,
         historySize: config[STORAGE_KEYS.HISTORY_SIZE] || 20,
-        sidebarMode: config[STORAGE_KEYS.SIDEBAR_MODE] || 'ignore'
+        sidebarMode: config[STORAGE_KEYS.SIDEBAR_MODE] || 'ignore',
+        newsSearch: !!config[STORAGE_KEYS.NEWS_SEARCH],
+        newsMaxSearches: config[STORAGE_KEYS.NEWS_MAX_SEARCHES] || 10,
+        newsQuietStart: config[STORAGE_KEYS.NEWS_QUIET_START] ?? 21,
+        newsQuietStop: config[STORAGE_KEYS.NEWS_QUIET_STOP] ?? 9
       }
     };
   } catch (error) {
@@ -782,6 +856,9 @@ async function handleDiagLog(tabId) {
   <h2>Stored Customization</h2>
   <pre>${response.storedCustomization ? escapeHtml(response.storedCustomization) : '<span class="null">null</span>'}</pre>
 
+  <h2>Stored Profiles</h2>
+  <pre>${response.storedProfiles ? escapeHtml(JSON.stringify(response.storedProfiles, null, 2)) : '<span class="null">null</span>'}</pre>
+
   <h2>Recent Messages (last 20)</h2>
   <p><em>Note: Images are included in sequence with type "image" or "text+image"</em></p>
   <pre>${escapeHtml(JSON.stringify(response.recentMessages, null, 2))}</pre>
@@ -843,6 +920,9 @@ async function handleDiagLogSanitized(tabId) {
 
   <h2>Stored Customization</h2>
   <pre>${sanitized.storedCustomization ? escapeHtml(sanitized.storedCustomization) : '<span class="null">null</span>'}</pre>
+
+  <h2>Stored Profiles</h2>
+  <pre>${sanitized.storedProfiles ? escapeHtml(JSON.stringify(sanitized.storedProfiles, null, 2)) : '<span class="null">null</span>'}</pre>
 
   <h2>Recent Messages (last 20)</h2>
   <pre>${escapeHtml(JSON.stringify(sanitized.recentMessages, null, 2))}</pre>
@@ -979,12 +1059,20 @@ function sanitizeDiagnosticState(data) {
     if (slm.id) slm.id = 'REDACTED';
   }
 
-  // Sanitize summary and customization
+  // Sanitize summary, customization, and profiles
   if (sanitized.storedSummary) {
     sanitized.storedSummary = redactText(sanitized.storedSummary);
   }
   if (sanitized.storedCustomization) {
     sanitized.storedCustomization = redactText(sanitized.storedCustomization);
+  }
+  if (sanitized.storedProfiles && typeof sanitized.storedProfiles === 'object') {
+    const redactedProfiles = {};
+    for (const [name, notes] of Object.entries(sanitized.storedProfiles)) {
+      const redactedName = getRedactedName(name);
+      redactedProfiles[redactedName] = typeof notes === 'string' ? redactText(notes) : notes;
+    }
+    sanitized.storedProfiles = redactedProfiles;
   }
 
   // Sanitize recent messages

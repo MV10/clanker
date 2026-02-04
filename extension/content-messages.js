@@ -311,6 +311,9 @@
     if (deferred.customization !== undefined) {
       ConversationStorage.saveConversationCustomization(deferred.customization);
     }
+    if (deferred.profiles !== undefined) {
+      ConversationStorage.saveConversationProfiles(deferred.profiles);
+    }
   }
 
   // Export to window for use by other content modules

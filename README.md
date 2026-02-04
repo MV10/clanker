@@ -47,6 +47,8 @@ If your chosen API provider and model supports it, the AI can perform web search
 
 Automated messages are always ignored. These are what phone carriers call A2P 10DLC (Automation-to-Person), which are messages sent from a 10-digit number (Amazon, your bank, 2-factor auth codes, flavor-of-the-week political campaigns, etc). If _any_ participant name is a 10-digit number, the conversation is ignored. Message content will not be read, and you can't activate the AI in those conversations. Only the Settings context-menu item is available when this type of conversation is active.
 
+If more than one participant is running the extension, the AI will try to figure out which "Clanker" belongs to whom. You can address specific instances with the owner's name, such as "Bob's Clanker" -- bear in mind different participants might be using different AI services, so you may get different answers to the same questions.
+
 ## Other Settings
 
 "Message History Size" controls how many SMS messages are sent with each interaction. The range is 10 to 500, and 50 is recommended. Since each request sent to the AI is independent (stateless), all messages are re-parsed every time, so this can help control costs. Some AI providers can recognize and cache repeat data. Currently only xAI does this automatically, to my knowledge.
@@ -58,6 +60,8 @@ An alternative is "Respond when idle" which only does this after your foreground
 The "Allow web searches" checkbox is off by default, as most AI providers charge a hefty fee for tool usage.
 
 The "Relaxed Responsiveness" checkbox is on by default. This emulates a more human-like response loop for the active conversation (and for inactive conversations in idle mode). This helps prevent the AI from appearing to dominate the conversation with instantaneous replies, which sometimes intimidates other participants into replying less often. When enabled, responsiveness varies based on message content, and the AI's replies are "typed" into the input box (showing others the "typing" notification, if enabled in Messages).
+
+A _highly_ experimental feature is profile tracking and news searches. The AI can generate and store profiles of each participant (such as your apparent interests). When the conversation is idle for at least two hours, each hour it'll start checking the news for anything unusual that matches anyone's interest, and decide whether to send a message about it. There are start/stop times for quiet hours so it doesn't nag anyone in the middle of the night (local clock, 24hr format). You can limit how many sites it checks (default 10, range 1 to 100) to help control API costs.
 
 ## Comments, Troubleshooting, etc.
 
