@@ -85,9 +85,14 @@
     }
 
     // Path B: Extend existing delay when relaxed mode is ON and a timer is pending
+    // Cap total accumulated delay at 15 seconds from now to prevent runaway accumulation
     if (relaxed && state.pendingResponseTimer && state.pendingAttemptResponse) {
       const additional = calculateReadingDelay(triggerMessage);
       state.responseTargetTime += additional;
+      const maxTargetTime = Date.now() + 15000;
+      if (state.responseTargetTime > maxTargetTime) {
+        state.responseTargetTime = maxTargetTime;
+      }
       clearTimeout(state.pendingResponseTimer);
       const remaining = Math.max(0, state.responseTargetTime - Date.now());
       state.pendingResponseTimer = setTimeout(state.pendingAttemptResponse, remaining);
@@ -593,12 +598,12 @@
       'Keep your responses brief and casual, matching the SMS chat style.',
       'Do not dominate the conversation. Only respond when appropriate.',
       'However, you MUST always reply when you are directly addressed by name (Clanker or Clank).',
-      'If you are receiving an image, check recent messages to determine if you were directly addressed by name, which requires a response.',  
+      'The requirement to reply when addressed remains true after analyzing any requested image content.',  
       '',
       'TEXT FORMATTING: SMS does not support markdown, HTML, or rich text. Use only plain text and emojis.',
       'Do not use asterisks for bold/italic, backticks for code, hash marks for headers, or any other markdown syntax.',
-      'Do not use HTML tags. Do not use numbered citation brackets for URLs. Only write plain, conversational text.',
-      'Emojis are fine in moderation but avoid long sequences of them.',
+      'Do not include citation data at the end of your replies.',  
+      'Only write plain, conversational text. Emojis are fine in moderation but avoid long sequences of them.',
       'Do not use SMS language, textese, txt-speak, texting abbreviations (such as "u" for "you", "ur" for "your", "b4" for "before", "gr8" for "great"), acronyms, or informal shortenings.',
       '',
       `Current participants: ${participants}.`,
@@ -644,10 +649,9 @@
       'IMAGES: Images appear inline in the conversation as [IMAGE: blob:...] with optional alt text.',
       'You cannot directly access the blob URL. To view an image, request it by src:',
       '{"requestImage": "blob:https://messages.google.com/..."}',
-      'The JSON payload must be the ONLY content in your response to fetch an image successfully.',  
+      'The JSON payload must be the ONLY response to fetch an image successfully.',  
       'Only request one image at a time. Only request when the image content is relevant.',
       'The extension will fetch the image and re-send it to you. Then respond normally.',
-      //'When you view an image, consider adding a brief description to the summary for future context.',
       '',
       'PARTICIPANT PROFILES: You maintain notes about each participant, tracking their interests, opinions,',
       'preferences, and relevant personal details mentioned in conversation.',
