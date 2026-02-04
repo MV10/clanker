@@ -49,16 +49,7 @@
       // Still initialize observers in case config is added later
     }
 
-    // Verify page structure using parser
-    const verification = Parser.verifyPageStructure();
-    if (!verification.valid) {
-      console.warn('[Clanker] Page structure check failed:', verification.details);
-      showWarning('Clanker cannot recognize the page structure. Google Messages may have updated.');
-      state.initializing = false;
-      return;
-    }
-
-    // Set up observers and listeners (do this even if no conversation is active)
+    // Set up observers and listeners (do this even if no conversation is active yet)
     Observers.setupMessageObserver();
     Observers.setupInputObserver();
     Observers.setupConversationObserver();
@@ -69,26 +60,9 @@
       window.ClankerSidebar.initialize();
     }
 
-    // If no conversation is active, wait for one to be selected
-    if (!verification.hasActiveConversation) {
-      console.log('[Clanker] No active conversation, waiting for selection');
-      // The conversation observer will detect when a conversation becomes active
-    } else {
-      // Detect current conversation and parse it
-      state.conversationChanging = true;  // Block message processing until parsed
-      state.parseComplete = false;        // Mark parse as incomplete
-      const conversationId = Parser.detectConversationId();
-      await handleConversationChange(conversationId);
-      // Wait for messages to fully load before parsing
-      setTimeout(() => {
-        // parseExistingConversation manages state.parseComplete itself
-        // (including during retry loops when messages haven't loaded yet)
-        if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
-          window.ClankerMessages.parseExistingConversation();
-        }
-        state.conversationChanging = false;   // Re-enable message processing
-      }, 500);
-    }
+    // Try to detect and parse the current conversation.
+    // If the DOM isn't ready yet, silently retry at 1s intervals.
+    attemptInitialConversationDetection();
 
     // Notify background that content script is ready
     chrome.runtime.sendMessage({ type: 'CONTENT_READY' });
@@ -96,6 +70,42 @@
     state.initializing = false;
     state.initialized = true;
     console.log('[Clanker] Initialized successfully, mode:', state.mode);
+  }
+
+  /**
+   * Attempt to detect and load the current conversation.
+   * If no conversation is found (DOM not ready yet), retries every 1s.
+   * Once detected, hands off to handleConversationChange + parseExistingConversation.
+   * Does nothing if a conversation was already detected by another path (e.g. conversation observer).
+   */
+  function attemptInitialConversationDetection() {
+    const conversationId = Parser.detectConversationId();
+    if (conversationId) {
+      console.log('[Clanker] Conversation detected:', conversationId);
+      state.conversationChanging = true;
+      state.parseComplete = false;
+      handleConversationChange(conversationId).then(() => {
+        // parseExistingConversation manages state.parseComplete itself
+        if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
+          window.ClankerMessages.parseExistingConversation();
+        }
+        state.conversationChanging = false;
+      });
+      return;
+    }
+
+    // No conversation found yet — the user may be on the sidebar without
+    // a conversation selected, or the DOM is still loading. Retry silently.
+    // The conversation observer will also catch URL-based changes, but this
+    // handles the case where the URL already points to a conversation whose
+    // DOM elements haven't rendered yet.
+    console.log('[Clanker] No conversation detected yet, will retry in 1s');
+    setTimeout(() => {
+      // Don't retry if a conversation was already picked up by the conversation observer
+      if (!state.currentConversationId) {
+        attemptInitialConversationDetection();
+      }
+    }, 1000);
   }
 
   /**

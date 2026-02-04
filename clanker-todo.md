@@ -1,6 +1,6 @@
 # Enhancements, Ideas, etc.
 
-* Remove the "cannot recognize page structure" warning, it is wrong more often than it is useful. Instead, if the conversation can't be found, the extension should silently and periodically retry parsing at one second intervals. 
+* The LLM response will still overwrite anything the local user is typing. If the user has already started typing, store the LLM response and wait for the input textarea to be blank (which indicates the user sent the message, or the user deleted what they typed).
 
 * Add more human-like delays to response-time (including additional delays if new messages arrive during the delay), and after a response is received, add further delays based on response length to simulate typing.
 

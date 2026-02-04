@@ -121,7 +121,7 @@ const ClankerPatterns = {
  */
 const ClankerParser = {
   /**
-   * Verify that the expected page structure exists
+   * Verify that the expected page structure exists (useful for diagnostics)
    * @returns {{valid: boolean, hasActiveConversation: boolean, details: Object}}
    */
   verifyPageStructure() {
@@ -552,7 +552,8 @@ const ClankerParser = {
     return !!(
       document.querySelector(ClankerSelectors.CONVERSATION_CONTAINER) ||
       document.querySelector(ClankerSelectors.CONVERSATION_THREAD) ||
-      document.querySelector(ClankerSelectors.MESSAGE_WRAPPER)
+      document.querySelector(ClankerSelectors.MESSAGE_WRAPPER) ||
+      document.querySelector(ClankerSelectors.SIDEBAR_ITEM)
     );
   },
 };
