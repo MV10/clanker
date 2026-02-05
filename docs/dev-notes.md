@@ -6,6 +6,8 @@
 
 # Enhancements, Ideas, Notes, etc.
 
+* Eliminate all reliance on conversation header (participant list), only use conversation ID. Users can rename a conversation which will change any identifier generated from the header (which would orphan associated data). Purge the entire database after this code change.
+
 * An image attachment may take some time to download. Attempts to retrieve it too early will fail. Need more research to understand what the LLM sees (bad URI?).
 
 * Optionally allow Clankers to be named? Scan the message sidebar to look for real username conflicts? What about conflicts with multiple Clankers by the same name in the conversation?

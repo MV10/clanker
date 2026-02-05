@@ -6,6 +6,8 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'Main';
   const Parser = window.ClankerParser;
   const Storage = window.ClankerStorage;
   const { state, MODES } = window.ClankerState;
@@ -19,12 +21,12 @@
   async function initialize() {
     // Prevent duplicate initialization (check both flag and in-progress state)
     if (state.initialized || state.initializing) {
-      console.log('[Clanker] Already initialized or initializing, skipping');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Already initialized or initializing, skipping');
       return;
     }
     state.initializing = true;
 
-    console.log('[Clanker] Initializing...');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'Initializing...');
 
     // Load configuration and mode
     const configResponse = await chrome.runtime.sendMessage({ type: 'GET_CONFIG' });
@@ -69,7 +71,7 @@
 
     state.initializing = false;
     state.initialized = true;
-    console.log('[Clanker] Initialized successfully, mode:', state.mode);
+    Log.info(LOG_SOURCE, state.currentConversationId, 'Initialized successfully, mode:', state.mode);
   }
 
   /**
@@ -81,7 +83,7 @@
   function attemptInitialConversationDetection() {
     const conversationId = Parser.detectConversationId();
     if (conversationId) {
-      console.log('[Clanker] Conversation detected:', conversationId);
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Conversation detected:', conversationId);
       state.conversationChanging = true;
       state.parseComplete = false;
       handleConversationChange(conversationId).then(() => {
@@ -99,7 +101,7 @@
     // The conversation observer will also catch URL-based changes, but this
     // handles the case where the URL already points to a conversation whose
     // DOM elements haven't rendered yet.
-    console.log('[Clanker] No conversation detected yet, will retry in 1s');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'No conversation detected yet, will retry in 1s');
     setTimeout(() => {
       // Don't retry if a conversation was already picked up by the conversation observer
       if (!state.currentConversationId) {
@@ -254,7 +256,7 @@
         window.ClankerMessages.parseExistingConversation();
       }
 
-      console.log('[Clanker] Conversation state purged (mode preserved:', preservedMode + ')');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Conversation state purged (mode preserved:', preservedMode + ')');
       showNotification('Conversation state purged', 'success');
 
       return { success: true };
@@ -309,7 +311,7 @@
 
       state.initialized = true;
 
-      console.log('[Clanker] Reinitialized after full purge (mode preserved:', preservedMode + ')');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Reinitialized after full purge (mode preserved:', preservedMode + ')');
       showNotification('All state data purged', 'success');
 
       return { success: true };
@@ -326,12 +328,12 @@
 
     // Ignore if mode hasn't actually changed
     if (oldMode === newMode) {
-      console.log(`[Clanker] Mode unchanged: ${newMode}`);
+      Log.info(LOG_SOURCE, state.currentConversationId, `Mode unchanged: ${newMode}`);
       return;
     }
 
     state.mode = newMode;
-    console.log(`[Clanker] Mode changed: ${oldMode} -> ${newMode}`);
+    Log.info(LOG_SOURCE, state.currentConversationId, `Mode changed: ${oldMode} -> ${newMode}`);
 
     // Save mode for this conversation
     ConversationStorage.saveConversationMode(newMode);
@@ -363,7 +365,7 @@
    */
   async function handleConversationChange(newConversationId) {
     if (state.currentConversationId && state.currentConversationId !== newConversationId) {
-      console.log('[Clanker] Conversation changed, resetting state');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Conversation changed, resetting state');
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
@@ -384,7 +386,7 @@
       await ConversationStorage.loadLastProcessedMessage();
     } catch (e) {
       // Storage may fail if extension context invalidated
-      console.warn('[Clanker] Could not load conversation data');
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Could not load conversation data');
     }
 
     // Start news timer if mode is active/available (restoring from stored mode)
@@ -414,7 +416,7 @@
     banner.appendChild(text);
     banner.appendChild(dismissBtn);
     document.body.appendChild(banner);
-    console.warn('[Clanker]', message);
+    Log.warn(LOG_SOURCE, state.currentConversationId, message);
   }
 
   /**
@@ -447,7 +449,7 @@
       }
     }, 5000);
 
-    console.log(`[Clanker] Notification (${type}):`, message);
+    Log.info(LOG_SOURCE, state.currentConversationId, `Notification (${type}):`, message);
   }
 
   /**
@@ -460,7 +462,7 @@
     if (!window.ClankerMessages || !window.ClankerMessages.isUserTyping()) {
       return Promise.resolve(true);
     }
-    console.log('[Clanker] User is typing, waiting for input to clear before sending');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'User is typing, waiting for input to clear before sending');
     return new Promise(resolve => {
       let elapsed = 0;
       const interval = 500;
@@ -468,11 +470,11 @@
         elapsed += interval;
         if (!window.ClankerMessages.isUserTyping()) {
           clearInterval(timer);
-          console.log('[Clanker] Input cleared, proceeding with send');
+          Log.info(LOG_SOURCE, state.currentConversationId, 'Input cleared, proceeding with send');
           resolve(true);
         } else if (elapsed >= timeoutMs) {
           clearInterval(timer);
-          console.warn('[Clanker] Timed out waiting for input to clear, sending anyway');
+          Log.warn(LOG_SOURCE, state.currentConversationId, 'Timed out waiting for input to clear, sending anyway');
           resolve(false);
         }
       }, interval);
@@ -527,20 +529,20 @@
       if (!response.success) {
         // Handle race condition: user started typing between waitForInputClear and MAIN world script
         if (response.error === 'user_typing' && retryCount < 5) {
-          console.log('[Clanker] User typing detected at send time, retrying (' + (retryCount + 1) + '/5)');
+          Log.info(LOG_SOURCE, state.currentConversationId, 'User typing detected at send time, retrying (' + (retryCount + 1) + '/5)');
           await new Promise(resolve => setTimeout(resolve, 1000));
           return doSendMessage(text, typingParams, retryCount + 1);
         }
         if (response.error === 'user_typing') {
           // Don't show visible notification — the user doesn't need to know
-          console.warn('[Clanker] Send abandoned: textarea still occupied after retries');
+          Log.warn(LOG_SOURCE, state.currentConversationId, 'Send abandoned: textarea still occupied after retries');
         } else {
           showNotification('Failed to send message: ' + response.error, 'error');
         }
       }
       return response.success;
     } catch (err) {
-      console.error('[Clanker] Send message error:', err);
+      Log.error(LOG_SOURCE, state.currentConversationId, 'Send message error:', err);
       showNotification('Failed to send message', 'error');
       return false;
     }

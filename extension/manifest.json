@@ -19,6 +19,7 @@
     {
       "matches": ["https://messages.google.com/*"],
       "js": [
+        "logging.js",
         "storage.js",
         "parser-chat.js",
         "parser-sidebar.js",

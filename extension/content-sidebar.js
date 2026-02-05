@@ -8,6 +8,8 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'Sidebar';
   const SidebarParser = window.ClankerSidebarParser;
   const ClankerPatterns = window.ClankerPatterns;
   const Storage = window.ClankerStorage;
@@ -29,24 +31,24 @@
     state.sidebar.mode = mode;
 
     if (mode === 'ignore') {
-      console.log('[Clanker:Sidebar] Mode is "ignore", sidebar monitoring disabled');
+      Log.info(LOG_SOURCE, null, 'Mode is "ignore", sidebar monitoring disabled');
       return;
     }
 
-    console.log('[Clanker:Sidebar] Initializing with mode:', mode);
+    Log.info(LOG_SOURCE, null, 'Initializing with mode:', mode);
 
     // Diagnostic: verify selectors match the actual DOM
     const listEl = document.querySelector(SidebarParser.SELECTORS.CONVERSATION_LIST);
     const items = SidebarParser.getAllConversationItems();
-    console.log('[Clanker:Sidebar] Conversation list element:', listEl?.tagName || 'NOT FOUND');
-    console.log('[Clanker:Sidebar] Conversation items found:', items.length);
+    Log.info(LOG_SOURCE, null, 'Conversation list element:', listEl?.tagName || 'NOT FOUND');
+    Log.info(LOG_SOURCE, null, 'Conversation items found:', items.length);
     if (items.length > 0) {
       const first = items[0];
-      console.log('[Clanker:Sidebar] First item tag:', first.tagName,
+      Log.info(LOG_SOURCE, null, 'First item tag:', first.tagName,
         'id:', SidebarParser.getConversationId(first),
         'snippet:', SidebarParser.getSnippetText(first));
     } else {
-      console.warn('[Clanker:Sidebar] No conversation items found with selector:',
+      Log.warn(LOG_SOURCE, null, 'No conversation items found with selector:',
         SidebarParser.SELECTORS.CONVERSATION_ITEM);
     }
 
@@ -93,7 +95,7 @@
   function setupSidebarObserver() {
     const listEl = document.querySelector(SidebarParser.SELECTORS.CONVERSATION_LIST);
     if (!listEl) {
-      console.warn('[Clanker:Sidebar] Conversation list element not found, retrying in 2s');
+      Log.warn(LOG_SOURCE, null, 'Conversation list element not found, retrying in 2s');
       setTimeout(setupSidebarObserver, 2000);
       return;
     }
@@ -109,7 +111,7 @@
       characterData: true,
     });
 
-    console.log('[Clanker:Sidebar] Observer started on conversation list');
+    Log.info(LOG_SOURCE, null, 'Observer started on conversation list');
   }
 
   /**
@@ -117,7 +119,7 @@
    */
   function takeSnippetSnapshot() {
     const items = SidebarParser.getAllConversationItems();
-    console.log('[Clanker:Sidebar] Taking snippet snapshot, items:', items.length);
+    Log.info(LOG_SOURCE, null, 'Taking snippet snapshot, items:', items.length);
     for (const item of items) {
       const id = SidebarParser.getConversationId(item);
       if (id) {
@@ -125,7 +127,7 @@
         state.sidebar.pendingSnippets.set(id, text);
       }
     }
-    console.log('[Clanker:Sidebar] Snapshot captured for', state.sidebar.pendingSnippets.size, 'conversations');
+    Log.info(LOG_SOURCE, null, 'Snapshot captured for', state.sidebar.pendingSnippets.size, 'conversations');
   }
 
   /**
@@ -157,28 +159,28 @@
       // Skip if snippet hasn't changed
       if (snippetText === previousSnippet) continue;
 
-      console.log('[Clanker:Sidebar] Snippet changed for', conversationId,
-        '| old:', JSON.stringify(previousSnippet), '| new:', JSON.stringify(snippetText));
+      Log.info(LOG_SOURCE, conversationId,
+        'Snippet changed | old:', JSON.stringify(previousSnippet), '| new:', JSON.stringify(snippetText));
 
       // Update stored snapshot
       state.sidebar.pendingSnippets.set(conversationId, snippetText);
 
       // Skip outgoing messages (our own, including clanker responses)
       if (snippetText.startsWith('You:')) {
-        console.log('[Clanker:Sidebar] Skipping outgoing message for:', conversationId);
+        Log.info(LOG_SOURCE, conversationId, 'Skipping outgoing message');
         continue;
       }
 
       // Evaluate whether this conversation should be processed
       evaluateConversation(conversationId, snippetText).then(shouldProcess => {
-        console.log('[Clanker:Sidebar] Evaluate result for', conversationId, ':', shouldProcess);
+        Log.info(LOG_SOURCE, conversationId, 'Evaluate result:', shouldProcess);
         if (shouldProcess && !state.sidebar.todoQueue.includes(conversationId)) {
-          console.log('[Clanker:Sidebar] Queuing conversation:', conversationId);
+          Log.info(LOG_SOURCE, conversationId, 'Queuing conversation');
           state.sidebar.todoQueue.push(conversationId);
           attemptProcessing();
         }
       }).catch(err => {
-        console.error('[Clanker:Sidebar] Evaluate error for', conversationId, ':', err);
+        Log.error(LOG_SOURCE, conversationId, 'Evaluate error:', err);
       });
     }
   }
@@ -197,7 +199,7 @@
       const stored = await Storage.get([modeKey]);
       const conversationMode = stored[modeKey];
 
-      console.log('[Clanker:Sidebar] Stored mode for', conversationId, ':', conversationMode || '(none)');
+      Log.info(LOG_SOURCE, conversationId, 'Stored mode:', conversationMode || '(none)');
 
       // No stored mode or deactivated → skip
       if (!conversationMode || conversationMode === MODES.DEACTIVATED) {
@@ -206,14 +208,14 @@
 
       // Available mode: only process if snippet mentions clanker
       if (conversationMode === MODES.AVAILABLE && !SidebarParser.snippetMentionsClanker(snippetText)) {
-        console.log('[Clanker:Sidebar] Available mode but no clanker mention, skipping');
+        Log.info(LOG_SOURCE, conversationId, 'Available mode but no clanker mention, skipping');
         return false;
       }
 
       // Active mode or Available+mentioned → process
       return true;
     } catch (e) {
-      console.warn('[Clanker:Sidebar] Error evaluating conversation:', e);
+      Log.warn(LOG_SOURCE, conversationId, 'Error evaluating conversation:', e);
       return false;
     }
   }
@@ -224,7 +226,7 @@
    * Attempt to start processing the queue based on sidebar mode conditions
    */
   function attemptProcessing() {
-    console.log('[Clanker:Sidebar] attemptProcessing: queue=', state.sidebar.todoQueue.length,
+    Log.info(LOG_SOURCE, null, 'attemptProcessing: queue=', state.sidebar.todoQueue.length,
       'isProcessing=', state.sidebar.isProcessing, 'mode=', state.sidebar.mode);
 
     if (state.sidebar.isProcessing) return;
@@ -234,13 +236,13 @@
 
     if (mode === 'idle') {
       if (!isForegroundIdle()) {
-        console.log('[Clanker:Sidebar] Not idle yet, scheduling idle check');
+        Log.info(LOG_SOURCE, null, 'Not idle yet, scheduling idle check');
         scheduleIdleCheck();
         return;
       }
     } else if (mode === 'process') {
       if (!isForegroundAvailable()) {
-        console.log('[Clanker:Sidebar] Foreground not available, scheduling availability check');
+        Log.info(LOG_SOURCE, null, 'Foreground not available, scheduling availability check');
         scheduleAvailabilityCheck();
         return;
       }
@@ -295,7 +297,7 @@
         // Timed out — clear timer but re-attempt later instead of losing queued items
         clearInterval(availabilityCheckTimer);
         availabilityCheckTimer = null;
-        console.log('[Clanker:Sidebar] Availability check timed out, will retry in 30s');
+        Log.info(LOG_SOURCE, null, 'Availability check timed out, will retry in 30s');
         setTimeout(attemptProcessing, 30000);
         return;
       }
@@ -317,7 +319,7 @@
     state.sidebar.isProcessing = true;
     state.sidebar.returnToConversationId = state.currentConversationId;
     userIntervened = false;
-    console.log('[Clanker:Sidebar] Beginning processing, return-to:', state.sidebar.returnToConversationId);
+    Log.info(LOG_SOURCE, null, 'Beginning processing, return-to:', state.sidebar.returnToConversationId);
 
     // Show banner over input area
     const banner = document.createElement('div');
@@ -343,17 +345,17 @@
 
     // Bail if mode changed while processing
     if (state.sidebar.mode === 'ignore') {
-      console.log('[Clanker:Sidebar] Mode changed to ignore, aborting');
+      Log.info(LOG_SOURCE, null, 'Mode changed to ignore, aborting');
       finishProcessing();
       return;
     }
 
-    console.log('[Clanker:Sidebar] Processing conversation:', conversationId);
+    Log.info(LOG_SOURCE, conversationId, 'Processing conversation');
 
     // Find the sidebar anchor for this conversation
     const anchor = SidebarParser.findConversationAnchor(conversationId);
     if (!anchor) {
-      console.warn('[Clanker:Sidebar] Anchor not found for:', conversationId);
+      Log.warn(LOG_SOURCE, conversationId, 'Anchor not found');
       state.sidebar.currentlyProcessingId = null;
       processNextInQueue();
       return;
@@ -363,7 +365,7 @@
     navigateToConversation(anchor);
     const navSuccess = await waitForNavigation(conversationId);
     if (!navSuccess) {
-      console.warn('[Clanker:Sidebar] Navigation failed for:', conversationId);
+      Log.warn(LOG_SOURCE, conversationId, 'Navigation failed');
       state.sidebar.currentlyProcessingId = null;
       processNextInQueue();
       return;
@@ -374,7 +376,7 @@
 
     if (!completed) {
       // User intervened or timeout
-      console.log('[Clanker:Sidebar] Processing interrupted');
+      Log.info(LOG_SOURCE, null, 'Processing interrupted');
       finishProcessing();
       return;
     }
@@ -420,14 +422,14 @@
         }
 
         if (elapsed >= timeout) {
-          console.warn('[Clanker:Sidebar] Navigation timeout waiting for:', targetConversationId);
+          Log.warn(LOG_SOURCE, targetConversationId, 'Navigation timeout');
           clearInterval(timer);
           resolve(false);
           return;
         }
 
         if (state.currentConversationId === targetConversationId) {
-          console.log('[Clanker:Sidebar] Navigation confirmed to:', targetConversationId);
+          Log.info(LOG_SOURCE, targetConversationId, 'Navigation confirmed');
           clearInterval(timer);
           resolve(true);
         }
@@ -461,7 +463,7 @@
 
         // Safety timeout
         if (elapsed >= timeout) {
-          console.warn('[Clanker:Sidebar] Processing timeout for:', state.sidebar.currentlyProcessingId);
+          Log.warn(LOG_SOURCE, state.sidebar.currentlyProcessingId, 'Processing timeout');
           clearInterval(timer);
           resolve(true);
           return;
@@ -474,13 +476,13 @@
           if (!settling) {
             settling = true;
             settleWait = 0;
-            console.log('[Clanker:Sidebar] Pipeline idle, settling...');
+            Log.info(LOG_SOURCE, state.sidebar.currentlyProcessingId, 'Pipeline idle, settling...');
           }
           settleWait += interval;
 
           // Short settle for sent message to appear in DOM
           if (settleWait >= 1000) {
-            console.log('[Clanker:Sidebar] Processing complete for:', state.sidebar.currentlyProcessingId);
+            Log.info(LOG_SOURCE, state.sidebar.currentlyProcessingId, 'Processing complete');
             clearInterval(timer);
             resolve(true);
           }
@@ -502,13 +504,13 @@
       return;
     }
 
-    console.log('[Clanker:Sidebar] Returning to foreground:', returnId);
+    Log.info(LOG_SOURCE, returnId, 'Returning to foreground');
     const anchor = SidebarParser.findConversationAnchor(returnId);
     if (anchor) {
       navigateToConversation(anchor);
       await waitForNavigation(returnId);
     } else {
-      console.warn('[Clanker:Sidebar] Return anchor not found for:', returnId);
+      Log.warn(LOG_SOURCE, returnId, 'Return anchor not found');
     }
     finishProcessing();
   }
@@ -527,7 +529,7 @@
     const banner = document.querySelector('.clanker-sidebar-banner');
     if (banner) banner.remove();
 
-    console.log('[Clanker:Sidebar] Processing finished');
+    Log.info(LOG_SOURCE, null, 'Processing finished');
   }
 
   // ── User Intervention ───────────────────────────────────────────
@@ -545,7 +547,7 @@
    * @param {string} newConversationId
    */
   function notifyManualConversationChange(newConversationId) {
-    console.log('[Clanker:Sidebar] Manual conversation change detected:', newConversationId);
+    Log.info(LOG_SOURCE, newConversationId, 'Manual conversation change detected');
     handleUserIntervention(newConversationId);
   }
 

@@ -3,7 +3,9 @@
  * Handles settings configuration and API connection testing
  */
 
-// Storage module is loaded before this script via popup.html
+// Logging and Storage modules are loaded before this script via popup.html
+const Log = window.ClankerLog;
+const LOG_SOURCE = 'Settings';
 const Storage = window.ClankerStorage;
 
 const STORAGE_KEYS = {
@@ -85,7 +87,7 @@ async function loadSettings() {
 
     updateConnectionStatus();
   } catch (error) {
-    console.error('Failed to load settings:', error);
+    Log.error(LOG_SOURCE, null, 'Failed to load settings:', error);
     showBanner('Failed to load settings', 'error');
   }
 }
@@ -159,7 +161,7 @@ async function saveSettings(event) {
     return;
   }
   if (validation.warning) {
-    console.warn('Endpoint warning:', validation.warning);
+    Log.warn(LOG_SOURCE, null, 'Endpoint warning:', validation.warning);
   }
 
   // Clamp history size to valid range
@@ -185,7 +187,7 @@ async function saveSettings(event) {
     showBanner('Settings saved successfully', 'success');
     updateConnectionStatus();
   } catch (error) {
-    console.error('Failed to save settings:', error);
+    Log.error(LOG_SOURCE, null, 'Failed to save settings:', error);
     showBanner('Failed to save settings', 'error');
   }
 }
@@ -221,7 +223,7 @@ async function testConnection() {
       setConnectionStatus('error', 'Connection failed');
     }
   } catch (error) {
-    console.error('Connection test failed:', error);
+    Log.error(LOG_SOURCE, null, 'Connection test failed:', error);
     showBanner(`Test failed: ${error.message}`, 'error');
     setConnectionStatus('error', 'Error');
   } finally {

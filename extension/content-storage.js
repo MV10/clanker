@@ -6,6 +6,8 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'Storage';
   const Storage = window.ClankerStorage;
   const { state, MODES, isExtensionContextValid, handleInvalidatedContext } = window.ClankerState;
 
@@ -21,10 +23,10 @@
       state.conversationSummary = result[key] || null;
 
       if (state.conversationSummary) {
-        console.log('[Clanker] Loaded conversation summary');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Loaded conversation summary');
       }
     } catch (error) {
-      console.warn('[Clanker] Failed to load conversation summary:', error);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to load conversation summary:', error);
     }
   }
 
@@ -38,9 +40,9 @@
       const key = `summary_${state.currentConversationId}`;
       await Storage.set({ [key]: summary });
       state.conversationSummary = summary;
-      console.log('[Clanker] Saved conversation summary');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Saved conversation summary');
     } catch (error) {
-      console.warn('[Clanker] Failed to save conversation summary:', error);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to save conversation summary:', error);
     }
   }
 
@@ -65,7 +67,7 @@
       if (storedMode && Object.values(MODES).includes(storedMode)) {
         state.mode = storedMode;
         await chrome.runtime.sendMessage({ type: 'SET_MODE', mode: storedMode });
-        console.log('[Clanker] Restored conversation mode:', storedMode);
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Restored conversation mode:', storedMode);
 
         // If restoring to deactivated, ensure debugger is detached
         if (storedMode === MODES.DEACTIVATED) {
@@ -82,7 +84,7 @@
       if (!isExtensionContextValid()) {
         handleInvalidatedContext(showNotification);
       } else {
-        console.warn('[Clanker] Failed to load conversation mode:', error);
+        Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to load conversation mode:', error);
       }
       state.mode = MODES.DEACTIVATED;
     }
@@ -97,9 +99,9 @@
     try {
       const key = `mode_${state.currentConversationId}`;
       await Storage.set({ [key]: mode });
-      console.log('[Clanker] Saved conversation mode:', mode);
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Saved conversation mode:', mode);
     } catch (error) {
-      console.warn('[Clanker] Failed to save conversation mode:', error);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to save conversation mode:', error);
     }
   }
 
@@ -115,10 +117,10 @@
       state.conversationCustomization = result[key] || null;
 
       if (state.conversationCustomization) {
-        console.log('[Clanker] Loaded conversation customization');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Loaded conversation customization');
       }
     } catch (error) {
-      console.warn('[Clanker] Failed to load conversation customization:', error);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to load conversation customization:', error);
     }
   }
 
@@ -133,15 +135,15 @@
       if (customization) {
         await Storage.set({ [key]: customization });
         state.conversationCustomization = customization;
-        console.log('[Clanker] Saved conversation customization');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Saved conversation customization');
       } else {
         // Allow clearing customization
         await Storage.remove(key);
         state.conversationCustomization = null;
-        console.log('[Clanker] Cleared conversation customization');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Cleared conversation customization');
       }
     } catch (error) {
-      console.warn('[Clanker] Failed to save conversation customization:', error);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to save conversation customization:', error);
     }
   }
 
@@ -157,10 +159,10 @@
       state.conversationProfiles = result[key] || null;
 
       if (state.conversationProfiles) {
-        console.log('[Clanker] Loaded conversation profiles');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Loaded conversation profiles');
       }
     } catch (error) {
-      console.warn('[Clanker] Failed to load conversation profiles:', error);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to load conversation profiles:', error);
     }
   }
 
@@ -176,14 +178,14 @@
       if (profiles && Object.keys(profiles).length > 0) {
         await Storage.set({ [key]: profiles });
         state.conversationProfiles = profiles;
-        console.log('[Clanker] Saved conversation profiles');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Saved conversation profiles');
       } else {
         await Storage.remove(key);
         state.conversationProfiles = null;
-        console.log('[Clanker] Cleared conversation profiles');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Cleared conversation profiles');
       }
     } catch (error) {
-      console.warn('[Clanker] Failed to save conversation profiles:', error);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to save conversation profiles:', error);
     }
   }
 
@@ -199,10 +201,10 @@
       state.lastProcessedMessage = result[key] || null;
 
       if (state.lastProcessedMessage) {
-        console.log('[Clanker] Loaded last processed message:', state.lastProcessedMessage.id);
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Loaded last processed message:', state.lastProcessedMessage.id);
       }
     } catch (error) {
-      console.warn('[Clanker] Failed to load last processed message:', error);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to load last processed message:', error);
     }
   }
 
@@ -225,7 +227,7 @@
       await Storage.set({ [key]: messageData });
       state.lastProcessedMessage = messageData;
     } catch (error) {
-      console.warn('[Clanker] Failed to save last processed message:', error);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to save last processed message:', error);
     }
   }
 

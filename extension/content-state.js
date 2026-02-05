@@ -6,6 +6,9 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'State';
+
   /**
    * Operating modes
    */
@@ -102,7 +105,7 @@
    * @param {Function} showNotification - Notification function from content-main
    */
   function handleInvalidatedContext(showNotification) {
-    console.warn('[Clanker] Extension was reloaded. Please refresh this page.');
+    Log.warn(LOG_SOURCE, null, 'Extension was reloaded. Please refresh this page.');
     if (showNotification) {
       showNotification('Extension was reloaded. Please refresh this page.', 'info');
     }

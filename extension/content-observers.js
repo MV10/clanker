@@ -6,6 +6,8 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'Observers';
   const Parser = window.ClankerParser;
   const Selectors = window.ClankerSelectors;
   const { state, MODES } = window.ClankerState;
@@ -35,7 +37,7 @@
       subtree: true
     });
 
-    console.log('[Clanker] Message observer started');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'Message observer started');
   }
 
   /**
@@ -123,7 +125,7 @@
             state.parseComplete = true;
             state.conversationChanging = false;
             isProcessingChange = false;
-            console.warn('[Clanker] Error during conversation change:', e);
+            Log.warn(LOG_SOURCE, state.currentConversationId, 'Error during conversation change:', e);
           }
         }
       }, 200);
@@ -155,13 +157,13 @@
   function setupVisibilityListener() {
     document.addEventListener('visibilitychange', async () => {
       if (document.visibilityState === 'visible' && state.currentConversationId) {
-        console.log('[Clanker] Tab became visible, reloading conversation state');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Tab became visible, reloading conversation state');
         try {
           await ConversationStorage.loadConversationMode();
           await ConversationStorage.loadConversationSummary();
           await ConversationStorage.loadConversationCustomization();
         } catch (e) {
-          console.warn('[Clanker] Failed to reload conversation state:', e);
+          Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to reload conversation state:', e);
         }
       }
     });

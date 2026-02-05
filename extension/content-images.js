@@ -6,6 +6,8 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'Images';
   const Storage = window.ClankerStorage;
   const { state, IMAGE_CONFIG } = window.ClankerState;
 
@@ -99,7 +101,7 @@
   async function getOptimizedImage(src, messageId) {
     // Return cached if same image
     if (cachedImage.src === src && cachedImage.dataUrl) {
-      console.log('[Clanker] Using cached image');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Using cached image');
       return {
         dataUrl: cachedImage.dataUrl,
         width: cachedImage.width,
@@ -112,7 +114,7 @@
     try {
       const stored = await Storage.get(cacheKey);
       if (stored[cacheKey] && stored[cacheKey].src === src) {
-        console.log('[Clanker] Loaded image from IndexedDB cache');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Loaded image from IndexedDB cache');
         cachedImage = stored[cacheKey];
         return {
           dataUrl: cachedImage.dataUrl,
@@ -121,12 +123,12 @@
         };
       }
     } catch (e) {
-      console.warn('[Clanker] Failed to load cached image:', e);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to load cached image:', e);
     }
 
     // Fetch and optimize the image
     try {
-      console.log('[Clanker] Fetching and optimizing image...');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Fetching and optimizing image...');
       const optimized = await fetchAndOptimizeImage(src);
 
       // Update cache
@@ -140,11 +142,11 @@
 
       // Store in IndexedDB
       await Storage.set({ [cacheKey]: cachedImage });
-      console.log('[Clanker] Cached optimized image');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Cached optimized image');
 
       return optimized;
     } catch (error) {
-      console.error('[Clanker] Failed to optimize image:', error);
+      Log.error(LOG_SOURCE, state.currentConversationId, 'Failed to optimize image:', error);
       return null;
     }
   }
