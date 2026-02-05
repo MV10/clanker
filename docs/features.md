@@ -81,12 +81,30 @@ After the LLM responds, the message is typed character-by-character into the inp
 ### User-Typing Protection
 
 A race condition existed where the MAIN world script could overwrite user input that started after `waitForInputClear` passed but before the script executed. This is fixed by:
-* 
+
 * The MAIN world script checks the textarea content before clearing; if non-empty and not UI text (SMS/RCS labels), it returns a `user_typing` error instead of destroying the input
 * `sendMessage` retries up to 5 times with 1-second delays on `user_typing` errors
+* If retries are exhausted, the error is logged to the console (not shown as a visible notification to the user)
+
+### Send Serialization
+
+Multiple `sendMessage` calls are serialized via a promise queue so each call waits for the previous one to complete. This prevents:
+* Overlapping typing simulations corrupting each other (e.g. a second LLM response trying to type while the first is still being typed into the textarea)
+* The MAIN world script misidentifying the extension's own partially-typed content as user input (`user_typing` false positive)
+
+The `isUserTyping()` check in `attemptResponse` is also skipped when `state.sendingMessage` is true, since the textarea content belongs to the extension's typing simulation, not the user.
+
+### Sidebar Send-In-Progress Guard
+
+While a message is being sent (including during typing simulation), a `sendingMessage` flag prevents sidebar processing from navigating away from the foreground conversation. This protects against:
+* Typing simulation writing characters into the wrong conversation's input field
+* Partial or corrupted messages being sent to the wrong conversation
+* Post-send data (summaries, profiles, customization) being saved to the wrong conversation ID
+
+The flag is set for the entire duration of `sendMessage` (from input-clear wait through typing simulation and message submission) and is checked by both the foreground availability gate and the sidebar pipeline-completion wait.
 
 ### Sidebar Exceptions
- 
+
 * Sidebar "process" mode: all delays and typing simulation are skipped (instant response)
 * Sidebar "idle" mode: reading delays and typing simulation apply normally when relaxed mode is on
 
@@ -293,7 +311,7 @@ The extension can only interact with the single foreground conversation loaded i
 A settings dropdown ("Inactive Conversation Response") controls behavior with three options:
 
 * **Ignore new messages** (default): Sidebar is not monitored at all. No observer is created, no processing occurs.
-* **Process new messages**: New messages in non-foreground conversations are processed as soon as the foreground is available (user is not typing, no LLM request in flight, no pending response timer, no conversation change in progress).
+* **Process new messages**: New messages in non-foreground conversations are processed as soon as the foreground is available (user is not typing, no LLM request in flight, no pending response timer, no message being sent or typed, no conversation change in progress).
 * **Respond when idle (10min)**: New messages are queued but only processed after 10 minutes of foreground inactivity. Activity is defined as receiving new messages, user input activity, or LLM activity.
 
 The setting is stored in IndexedDB as `sidebarMode`.
@@ -324,7 +342,7 @@ When a snippet change is detected, the conversation is evaluated against its sto
 * Only one conversation is processed at a time (`isProcessing` flag)
 * In **Process** mode: processing begins as soon as the foreground is available (checked via 2-second polling, 2-minute timeout)
 * In **Idle** mode: processing waits for 10 minutes of foreground inactivity (checked via 30-second polling)
-* Both modes require foreground availability (not typing, no LLM in flight, no pending timer, not changing conversations)
+* Both modes require foreground availability (not typing, no LLM in flight, no pending timer, no message being sent/typed, not changing conversations)
 
 ### Navigation and Processing
 1. Store the current foreground conversation ID as the return target
@@ -332,7 +350,7 @@ When a snippet change is detected, the conversation is evaluated against its sto
 3. Find the sidebar anchor for the target conversation and click it
 4. Wait for the conversation change to be confirmed (poll `state.currentConversationId`, 200ms interval, 10s timeout)
 5. The existing conversation-change pipeline handles loading: `handleConversationChange` >> `parseExistingConversation` >> mode restore >> message processing >> LLM invocation
-6. Wait for the pipeline to complete: `parseComplete` is true, no LLM in flight, no pending response timer, plus a 1-second settle period for sent messages to appear in the DOM (polled at 500ms, 60s safety timeout)
+6. Wait for the pipeline to complete: `parseComplete` is true, no LLM in flight, no pending response timer, no message being sent/typed, plus a 1-second settle period for sent messages to appear in the DOM (polled at 500ms, 60s safety timeout)
 7. Process the next conversation in the queue, or return to the foreground
 
 ### Return to Foreground
@@ -371,6 +389,9 @@ All sidebar state is in-memory only (cleared on page refresh):
 * `sidebar.idleTimeoutMs` — Idle threshold (10 minutes)
 * `sidebar.idleCheckTimer` — Timer handle for periodic idle checks
 * `sidebar.pendingSnippets` — Map of conversation ID to last known snippet text
+
+The following top-level state fields are also checked by sidebar processing:
+* `state.sendingMessage` — True while `sendMessage` is executing (blocks sidebar navigation)
 
 ## Deferred LLM Responses
 

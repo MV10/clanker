@@ -126,8 +126,10 @@
         return;
       }
 
-      // Check actual input content, not just cached state
-      if (window.ClankerMessages && window.ClankerMessages.isUserTyping()) {
+      // Check actual input content, not just cached state.
+      // Skip this check if the extension itself is sending a message (typing simulation
+      // puts content in the textarea that isUserTyping would misidentify as user input).
+      if (!state.sendingMessage && window.ClankerMessages && window.ClankerMessages.isUserTyping()) {
         console.log('[Clanker] User is typing, skipping response');
         return;
       }

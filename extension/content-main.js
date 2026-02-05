@@ -456,15 +456,41 @@
   }
 
   /**
-   * Send a message using main world injection via background script
-   * This ensures Angular recognizes the input and click.
-   * If the user is typing, waits for the input field to clear first
-   * to avoid destroying their in-progress text.
+   * Send a message using main world injection via background script.
+   * Serialized: each call waits for the previous one to complete before starting.
+   * This prevents overlapping typing simulations from corrupting each other
+   * (e.g. a second LLM response trying to type while the first is still being typed).
    * @param {string} text - Message text to send
    * @param {Object|null} typingParams - Typing simulation params, or null
-   * @param {number} _retryCount - Internal retry counter for user_typing races
    */
-  async function sendMessage(text, typingParams = null, _retryCount = 0) {
+  let sendMessageQueue = Promise.resolve();
+
+  async function sendMessage(text, typingParams = null) {
+    // Serialize: wait for any previous sendMessage to complete
+    const previous = sendMessageQueue;
+    let resolveQueue;
+    sendMessageQueue = new Promise(r => { resolveQueue = r; });
+    await previous;
+
+    // Flag that a message send is in progress (including typing simulation).
+    // This prevents sidebar processing from navigating away mid-send,
+    // and prevents attemptResponse from misinterpreting extension typing as user typing.
+    state.sendingMessage = true;
+    try {
+      return await doSendMessage(text, typingParams, 0);
+    } finally {
+      state.sendingMessage = false;
+      resolveQueue();
+    }
+  }
+
+  /**
+   * Internal: attempt to send a message with retry logic for user_typing races.
+   * @param {string} text
+   * @param {Object|null} typingParams
+   * @param {number} retryCount
+   */
+  async function doSendMessage(text, typingParams, retryCount) {
     // Wait for the user to finish typing before injecting into the input field
     await waitForInputClear();
 
@@ -476,12 +502,17 @@
       const response = await chrome.runtime.sendMessage(payload);
       if (!response.success) {
         // Handle race condition: user started typing between waitForInputClear and MAIN world script
-        if (response.error === 'user_typing' && _retryCount < 5) {
-          console.log('[Clanker] User typing detected at send time, retrying (' + (_retryCount + 1) + '/5)');
+        if (response.error === 'user_typing' && retryCount < 5) {
+          console.log('[Clanker] User typing detected at send time, retrying (' + (retryCount + 1) + '/5)');
           await new Promise(resolve => setTimeout(resolve, 1000));
-          return sendMessage(text, typingParams, _retryCount + 1);
+          return doSendMessage(text, typingParams, retryCount + 1);
         }
-        showNotification('Failed to send message: ' + response.error, 'error');
+        if (response.error === 'user_typing') {
+          // Don't show visible notification — the user doesn't need to know
+          console.warn('[Clanker] Send abandoned: textarea still occupied after retries');
+        } else {
+          showNotification('Failed to send message: ' + response.error, 'error');
+        }
       }
       return response.success;
     } catch (err) {

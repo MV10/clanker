@@ -74,13 +74,14 @@
 
   /**
    * Check if the foreground is available for sidebar processing
-   * (not typing, no LLM in flight, no pending timer, not changing conversations)
+   * (not typing, no LLM in flight, no pending timer, not sending a message, not changing conversations)
    * @returns {boolean}
    */
   function isForegroundAvailable() {
     return !state.userTyping &&
            !state.llmInFlight &&
            !state.pendingResponseTimer &&
+           !state.sendingMessage &&
            !state.conversationChanging;
   }
 
@@ -466,9 +467,10 @@
           return;
         }
 
-        // Wait for parse complete + no pending or active LLM work
+        // Wait for parse complete + no pending or active LLM work + no message being sent
         if (state.parseComplete && !state.conversationChanging &&
-            !state.llmInFlight && !state.pendingResponseTimer) {
+            !state.llmInFlight && !state.pendingResponseTimer &&
+            !state.sendingMessage) {
           if (!settling) {
             settling = true;
             settleWait = 0;

@@ -42,6 +42,7 @@
     // Concurrency control for LLM requests
     llmRequestId: 0,        // Incremented each time a response is triggered
     llmInFlight: false,     // True while an LLM request is active
+    sendingMessage: false,  // True while sendMessage is executing (includes typing simulation)
     // Conversation change guard
     conversationChanging: false,  // True while switching conversations
     parseComplete: true,          // True after parseExistingConversation completes (default true for normal operation)
