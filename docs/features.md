@@ -364,6 +364,16 @@ The LLM-generated activation message receives context about the conversation and
 * Mode is restored when returning to a conversation
 * New/unknown conversations default to Deactivated
 
+## Orphaned Data Cleanup
+
+A persistent timer runs every 10 minutes to purge stored data for conversations no longer visible in the UI.
+
+* Collects all visible conversation IDs: the current foreground conversation plus all sidebar conversation items
+* Scans all IndexedDB keys matching the 6 per-conversation prefixes (`mode_`, `summary_`, `customization_`, `profiles_`, `lastMessage_`, `image_cache_`)
+* Removes any entries whose conversation ID is not in the visible set
+* Global configuration keys are never affected
+* Safety guard: the purge is skipped entirely if no conversations are visible (e.g. sidebar not yet loaded)
+
 ## API Endpoint Validation
 
 * Endpoint URL must be valid http:// or https:// URL

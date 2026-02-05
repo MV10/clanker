@@ -84,6 +84,14 @@
       // Skip if already processing a change
       if (isProcessingChange) return;
 
+      // Immediately suppress message processing while we wait for the
+      // DOM to settle.  The message observer fires from the same mutations
+      // that trigger us, but it runs first (registered earlier).  Without
+      // this, processNewNodes passes its guards because conversationChanging
+      // is still false, producing a flood of spurious "Found wrapper" logs.
+      state.conversationChanging = true;
+      state.parseComplete = false;
+
       // Clear any pending timer
       if (conversationChangeTimer) {
         clearTimeout(conversationChangeTimer);
@@ -95,38 +103,41 @@
         if (isProcessingChange) return;
 
         const newConversationId = Parser.detectConversationId();
-        if (newConversationId !== state.currentConversationId) {
-          // Detect sidebar-initiated vs user-initiated navigation
-          if (window.ClankerSidebar && !window.ClankerSidebar.isSidebarNavigation()
-              && window.ClankerSidebar.isProcessing()) {
-            window.ClankerSidebar.notifyManualConversationChange(newConversationId);
-          }
+        if (newConversationId === state.currentConversationId) {
+          // False alarm — same conversation, restore flags
+          state.conversationChanging = false;
+          state.parseComplete = true;
+          return;
+        }
 
-          isProcessingChange = true;
-          state.conversationChanging = true;  // Block message processing
-          state.parseComplete = false;        // Mark parse as incomplete
-          try {
-            // Call handleConversationChange from content-main module
-            if (window.ClankerMain && window.ClankerMain.handleConversationChange) {
-              await window.ClankerMain.handleConversationChange(newConversationId);
-            }
-            // Wait a bit more for messages to load, then parse
-            setTimeout(() => {
-              // Call parseExistingConversation from content-messages module
-              // parseExistingConversation manages state.parseComplete itself
-              // (including during retry loops when messages haven't loaded yet)
-              if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
-                window.ClankerMessages.parseExistingConversation();
-              }
-              state.conversationChanging = false;   // Re-enable message processing
-              isProcessingChange = false;
-            }, 300);
-          } catch (e) {
-            state.parseComplete = true;
-            state.conversationChanging = false;
-            isProcessingChange = false;
-            Log.warn(LOG_SOURCE, state.currentConversationId, 'Error during conversation change:', e);
+        // Detect sidebar-initiated vs user-initiated navigation
+        if (window.ClankerSidebar && !window.ClankerSidebar.isSidebarNavigation()
+            && window.ClankerSidebar.isProcessing()) {
+          window.ClankerSidebar.notifyManualConversationChange(newConversationId);
+        }
+
+        isProcessingChange = true;
+        try {
+          // Call handleConversationChange from content-main module
+          if (window.ClankerMain && window.ClankerMain.handleConversationChange) {
+            await window.ClankerMain.handleConversationChange(newConversationId);
           }
+          // Wait a bit more for messages to load, then parse
+          setTimeout(() => {
+            // Call parseExistingConversation from content-messages module
+            // parseExistingConversation manages state.parseComplete itself
+            // (including during retry loops when messages haven't loaded yet)
+            if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
+              window.ClankerMessages.parseExistingConversation();
+            }
+            state.conversationChanging = false;   // Re-enable message processing
+            isProcessingChange = false;
+          }, 300);
+        } catch (e) {
+          state.parseComplete = true;
+          state.conversationChanging = false;
+          isProcessingChange = false;
+          Log.warn(LOG_SOURCE, state.currentConversationId, 'Error during conversation change:', e);
         }
       }, 200);
     }
