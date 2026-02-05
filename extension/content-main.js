@@ -75,6 +75,11 @@
     state.initializing = false;
     state.initialized = true;
     Log.info(LOG_SOURCE, state.currentConversationId, 'Initialized successfully, mode:', state.mode);
+
+    // Periodic cleanup of orphaned conversation data
+    setInterval(() => {
+      ConversationStorage.purgeOrphanedData();
+    }, 10 * 60 * 1000);
   }
 
   /**

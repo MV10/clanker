@@ -231,6 +231,62 @@
     }
   }
 
+  /**
+   * Purge stored data for conversations no longer visible in the UI.
+   * Compares conversation IDs in the database against the current foreground
+   * conversation and all sidebar conversations; removes orphaned entries.
+   */
+  const CONVERSATION_KEY_PATTERN = /^(mode|summary|customization|profiles|image_cache|lastMessage)_(.+)$/;
+
+  async function purgeOrphanedData() {
+    try {
+      // Collect all conversation IDs visible in the UI
+      const visibleIds = new Set();
+      if (state.currentConversationId) {
+        visibleIds.add(state.currentConversationId);
+      }
+      const SidebarParser = window.ClankerSidebarParser;
+      if (SidebarParser) {
+        const items = SidebarParser.getAllConversationItems();
+        for (const item of items) {
+          const id = SidebarParser.getConversationId(item);
+          if (id) visibleIds.add(id);
+        }
+      }
+
+      // Safety: don't purge if we can't see any conversations
+      // (sidebar not loaded, page not ready, etc.)
+      if (visibleIds.size === 0) {
+        Log.info(LOG_SOURCE, state.currentConversationId, 'No conversations visible, skipping orphan purge');
+        return;
+      }
+
+      // Scan all stored keys for conversation-specific entries
+      const allData = await Storage.getAll();
+      const keysToRemove = [];
+      const orphanedIds = new Set();
+
+      for (const key of Object.keys(allData)) {
+        const match = key.match(CONVERSATION_KEY_PATTERN);
+        if (match) {
+          const conversationId = match[2];
+          if (!visibleIds.has(conversationId)) {
+            keysToRemove.push(key);
+            orphanedIds.add(conversationId);
+          }
+        }
+      }
+
+      if (keysToRemove.length > 0) {
+        await Storage.remove(keysToRemove);
+        Log.info(LOG_SOURCE, state.currentConversationId,
+          `Purged ${keysToRemove.length} orphaned keys for ${orphanedIds.size} conversation(s)`);
+      }
+    } catch (error) {
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Orphan purge failed:', error);
+    }
+  }
+
   // Export to window for use by other content modules
   window.ClankerConversationStorage = {
     loadConversationSummary,
@@ -242,7 +298,8 @@
     loadConversationProfiles,
     saveConversationProfiles,
     loadLastProcessedMessage,
-    saveLastProcessedMessage
+    saveLastProcessedMessage,
+    purgeOrphanedData
   };
 
 })();
