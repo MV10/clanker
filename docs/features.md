@@ -1,106 +1,52 @@
 # Overview
-* Refer to the local README.md for a high level description.
+ 
+* Refer to the local README.md for a high level description
 * The extension is restricted to processing pages from messages.google.com
 * Processes conversational text and still-image attachments 
 * During ongoing conversations, only process new comments, do not re-parse the entire page on each update
-* LLM replies must be prefixed with "[clanker]" so human users know it is LLM output
+* LLM replies must be prefixed with "[clanker]" so human participants know it is LLM output
 * The LLM will use the local user's input field and send button to participate in the conversation
 
-# Parsing Hints
-* These are observations about page structure as of FEB-2026; Google may change this in future releases
-
-## Container Structure
-* The main conversation area is marked with `data-e2e-conversation-container`
-* Messages are contained within `<mws-messages-list>` elements
-* The sidebar with other conversations uses `<mws-conversation-list-item>` with `role="option"`
-* Individual messages are wrapped in `<mws-message-wrapper>` with `data-e2e-message-wrapper`
-
-## Message Elements
-* Text messages use `<mws-text-message-part>` with `data-e2e-text-message-content`
-* Image attachments use `<mws-image-message-part>`
-* Image sources are blob URLs: `src="blob:https://messages.google.com/{key}"`
-* Each message has a unique `data-e2e-message-id` attribute for tracking
-
-## Message ID Formats
-* Outgoing messages use UUID format: `cad0b185-eb06-4110-a322-fd94474e1343`
-* Incoming messages use base64-like format: `MxJQ=xCObWTheaIK-gbF0nfA`
-* Temporary IDs use `tmp_` prefix: `tmp_615187582765` (not yet confirmed by server)
-* Temp IDs are converted to permanent IDs by Google Messages after server confirmation
-* Track messages using hybrid approach: ID primary, content+sender fallback for temp→permanent conversion
-
-## aria-label Format
-* Message text is in the `aria-label` attribute of `<mws-text-message-part>`
-* Format: `"NAME said: MESSAGE. Sent/Received on DATE at TIME. [Read.] [REACTIONS]"`
-* Local user messages: `"You said: MESSAGE. Sent on DATE at TIME. Read."`
-* Remote participant messages: `"NAME said: MESSAGE. Received on DATE at TIME."`
-* LLM messages will appear as: `"You said: [clanker] MESSAGE. Sent on DATE at TIME. Read."`
-* Reactions are appended after Read: `"...Read. Jane Doe reacted with love. You and (555) 555-7334 reacted with laugh."`
-
-## Reactions
-* Reactions appear at the end of the aria-label text
-* Format: `"NAME reacted with TYPE."` or `"NAME and NAME reacted with TYPE."`
-* Multiple reactions can appear for the same message
-* Reaction types include: love, laugh, etc.
-* Reactors may be named contacts or phone numbers
-
-## Participant Names
-* Named contacts appear as their display name (e.g., "John Doe", "Mom")
-* Unsaved contacts appear as formatted phone numbers: `(XXX) XXX-XXXX`
-* Phone number participants are valid senders and reactors
-* The local user always appears as "You"
-
-## Tombstone Messages
-* Deleted or unsupported messages are marked with `data-e2e-message-tombstone`
-* These contain no useful content and should be skipped during parsing
-* Common causes: deleted messages, unsupported MMS types, expired media
-
-## Input Controls
-* Message input field: `data-e2e-message-input` or `data-e2e-message-input-box`
-* Send button: `data-e2e-send-text-button`
-
-## Windowing Behavior
-* The page maintains approximately 30-40 visible messages at a time
-* Older messages scroll out of the DOM as new messages arrive
-* Use `data-e2e-message-id` to track which messages have been processed
-* New messages appear at the end of the message list
-
-# Initialization
+# Extension Initialization
+ 
 * Present warnings to the local user in a banner at the top of the page
-* Warn the local user if extension configuration items are missing (Uninitialized mode)
-* Warn the local user if the LLM can't recognize the page structure, then stop processing the page
-* Only the active conversation should be processed
+* Warn the local user if critical configuration items are missing (Uninitialized mode): AI URI, key, model, or username
+* After the page renders, warn the local user if the LLM can't recognize the page structure, then stop processing the page
 * Disregard the page header, menus, user menu, and so on
 * Evaluate the page content and find the active conversation region
+* Separately catalog the inactive sidebar conversations
 * Review the available conversation history and catalog all participants
-* Recognize the conversational tone of the discussion and individual participants
-* Adopt a tone that is consistent with the conversation history until directed otherwise
+* The program assigns conversation IDs which are part of the window URL and sidebar conversation anchor tags
 
-# Conversation Switching
-* Detect the current conversation ID from the URL path or participant names
+# User-Initiated Foreground Conversation Switching
+ 
+* The conversation the local user wants to use is called the foreground conversation
+* Detect the foreground conversation ID from the URL path
 * Monitor for URL changes (SPA navigation) and browser history events
-* When the conversation changes:
+* When the foreground conversation changes due to user activity:
   - Clear participant list and processed message IDs
   - Cancel any pending LLM response
-  - Load stored mode, summary, customization, and last processed message for the conversation
+  - Load stored conversation data (mode, summary, customization, profiles, last processed message, etc)
   - Restore mode from storage (Deactivated is default only for new/unknown conversations)
 * Guard against race conditions during conversation switch:
   - Block message processing until conversation parse is complete
-  - Use hybrid message tracking to handle temp→permanent ID conversion
+  - Use hybrid message tracking to handle temp > permanent ID conversion
 
 ## Messages While Away
-When returning to a conversation, detect and handle messages that arrived while viewing another conversation:
-* Compare current messages against the stored last processed message
-* Use hybrid matching: try message ID first, fall back to content+sender match
-* In Active mode: consult LLM for any new human messages
-* In Available mode: consult LLM only if new messages mention Clanker
-* Fallback safety: skip if the trigger message already has a Clanker response following it
 
-# LLM Behaviors
-* Comment but do not dominate the conversation
-* Comments should be brief, consistent with the style of SMS chatting
-* Do not respond every time another participant speaks, not all comments seek your input
+* In some modes, the extension can temporarily switch the page to an inactive conversation.
+* When returning to the user's foreground conversation, detect and handle messages that arrived while away:
+  - Compare current messages against the stored last processed message
+  - Use hybrid matching: try message ID first, fall back to content+sender match
+  - In Active mode: consult LLM for any new human messages
+  - In Available mode: consult LLM only if new messages mention Clanker
+  - Fallback safety: skip if the trigger message already has a Clanker response following it
+
+# Extension-Controlled LLM Behaviors 
+ 
+* For LLM instructions, review system prompts in content-llm.js.
 * In Active mode: LLM is consulted for ALL new human messages; LLM decides whether to respond (can return null)
-* In Available mode: LLM is only invoked when "clanker" is mentioned
+* In Available mode: LLM is only invoked when "clanker" is mentioned; LLM is instructed that it MUST respond
 * If the local user is already typing a message, the LLM should not respond
 * Humans are slow; before responding, wait before replying to give the local user a chance to start typing
 * If a new message arrives while a response is pending, cancel the pending response and evaluate the new message instead (debouncing)
@@ -110,34 +56,42 @@ When returning to a conversation, detect and handle messages that arrived while 
 A "Relaxed responsiveness" checkbox (on by default) enables human-like reading delays and typing simulation.
 
 ### Reading Delay
+
 When relaxed mode is on, the response delay is based on message content rather than a flat timer:
-* Text messages: delay scales with character count at a simulated reading speed of 18-23 characters/second
-* Image messages: 500-1000ms additional delay
-* Minimum floor of 800ms
-* When multiple messages arrive in rapid succession, the reading delay extends (adds time for each new message) rather than resetting — the same response closure is reused
+ 
+* Specific durations and ranges are defined in the code (do not document here; they may change)
+* Text message delay scales with character count at a simulated reading speed (randomized range)
+* Image messages add additional delay (randomized range)
+* When multiple messages arrive in rapid succession, the reading delay extends (adds time for each new message) rather than resetting (the same response closure is reused)
 
 When relaxed mode is off, the original flat 1.5-2 second random delay is used.
 
 ### Typing Simulation
+
 After the LLM responds, the message is typed character-by-character into the input field:
+ 
+* Specific durations and ranges are defined in the code (do not document here; they may change)
 * The `[clanker]` prefix is inserted immediately
 * Remaining characters are inserted one at a time via `execCommand('insertText')`
-* Base typing speed is configurable (currently 350-450 cps in content-llm.js)
-* Each character has a randomized jitter delay added on top (currently 1-150ms)
+* Base typing speed is a randomized characters-per-second (cps) range
+* Each character has a randomized jitter delay added on top
 * Total typing time is capped at 8 seconds
 * Typing simulation is skipped when the per-character delay would be under 0.5ms
 
 ### User-Typing Protection
+
 A race condition existed where the MAIN world script could overwrite user input that started after `waitForInputClear` passed but before the script executed. This is fixed by:
+* 
 * The MAIN world script checks the textarea content before clearing; if non-empty and not UI text (SMS/RCS labels), it returns a `user_typing` error instead of destroying the input
 * `sendMessage` retries up to 5 times with 1-second delays on `user_typing` errors
 
 ### Sidebar Exceptions
+ 
 * Sidebar "process" mode: all delays and typing simulation are skipped (instant response)
 * Sidebar "idle" mode: reading delays and typing simulation apply normally when relaxed mode is on
-* Images in the conversation are included inline in the message history as [IMAGE: blob:...] references
 
 ## Concurrency Control
+ 
 * Track LLM request IDs to invalidate superseded requests
 * Prevent overlapping LLM requests with an in-flight flag
 * Validate request ID before sending response (discard if superseded)
@@ -148,33 +102,39 @@ A race condition existed where the MAIN world script could overwrite user input 
 To bound token growth and manage context efficiently, the extension uses a hybrid approach combining conversation summaries with recent literal messages.
 
 ## Response Format
-* The LLM must respond with JSON: `{"response": "message", "summary": "...", "customization": "..."}`
+
+* If the LLM returns plain text (not JSON), it's treated as the response with no summary update
+* Some models occasionally ignore the instructions to always return JSON
+* The LLM is instructed to respond with JSON as follows:
+ 
+* For a text-response: `{"response": "message", "summary": "...", "customization": "..."}`
+* TODO - document participant profile array
 * The `response` field contains the chat message (without [clanker] prefix), or `null` to skip responding
 * The `summary` field is optional and updates the stored conversation summary
 * The `customization` field is optional and updates the stored persona/style directive
-* The `requestImage` field can request image data by src: `{"requestImage": "blob:https://..."}`
-* If the LLM returns plain text (not JSON), it's treated as the response with no summary update
+
+* For an image request: `{"requestImage": "blob:https://..."}`
+* The `requestImage` field can request image data using the src attribute
 
 ## Null Responses
+* 
 * The LLM can return `{"response": null}` when it decides not to respond
 * Use null responses when: the message doesn't warrant input, others are having a private exchange, or there's nothing meaningful to add
-* The LLM can still update the summary even when not responding: `{"response": null, "summary": "..."}`
+* The LLM can still update internal data (summary, customization, profiles, etc) even when not responding: `{"response": null, "summary": "..."}`
+* Internal data fields can be left `undefined` to avoid modifying currently stored data
 
 ## Hybrid Context Strategy
+ 
 * Recent messages are sent literally to preserve conversational context
 * Message history size is configurable (10-500, default 20, recommended 50)
-* Older messages are represented by a summary stored per-conversation
+* Available message history is arbitrarily altered and constrained by Angular SPA page DOM content
+* Older messages are represented by an LLM-managed summary stored per-conversation
 * The summary is included as a system message: `[CONVERSATION SUMMARY - older messages not shown]`
 * This bounds token usage while preserving important historical context
-
-## When to Update Summary
-The LLM should provide an updated summary when:
-* Important context would be lost as messages age out of the literal window
-* Key decisions, plans, or commitments are made
-* Ongoing topics or threads need tracking
-* Participant dynamics or preferences emerge
+* LLM system prompts explain how the LLM should maintain summary data
 
 ## Summary Storage
+ 
 * Summaries are stored in IndexedDB keyed by conversation ID (`summary_{conversationId}`)
 * Summaries persist across browser sessions
 * Summaries are cleared when switching conversations (loaded fresh for each conversation)
@@ -184,26 +144,16 @@ The LLM should provide an updated summary when:
 Users can request the LLM adopt different personas or communication styles. These customizations are managed by the LLM and stored separately from conversation summaries.
 
 ## How Customization Works
+ 
 * Users request customization via natural language: "Clanker, talk like a pirate"
 * The LLM evaluates the request and stores a directive: "Speak in pirate dialect"
 * The customization is sent with each subsequent request as `[ACTIVE CUSTOMIZATION]`
 * The LLM can update customization by returning `{"customization": "new directive"}`
 * The LLM can clear customization by returning `{"customization": null}`
-
-## Allowed Customizations
-* Different tones (formal, casual, humorous)
-* Speech patterns and dialects
-* Roleplay personas (characters, celebrities, etc.)
-* Language style preferences
-
-## Rejected Customizations
-The LLM must reject requests that conflict with core behavior:
-* Cannot remove the [clanker] prefix (handled by the extension, not the LLM)
-* Cannot be instructed to dominate conversations or respond to every message
-* Cannot bypass safety guidelines or produce harmful content
-* Cannot ignore the JSON response format requirement
+* The LLM must reject requests that conflict with core behavior
 
 ## Customization Storage
+ 
 * Customizations are stored in IndexedDB keyed by conversation ID (`customization_{conversationId}`)
 * Customizations persist across browser sessions
 * Customizations are separate from summaries (different purposes, different update frequency)
@@ -214,12 +164,14 @@ The LLM must reject requests that conflict with core behavior:
 Images in the conversation are optimized for LLM consumption using an on-demand fetch approach.
 
 ## Inline Image Format
+ 
 * Images appear inline in the conversation flow as messages
 * Format: `Sender: [IMAGE: blob:https://messages.google.com/...] "alt text"`
 * This preserves conversational context (what led to the image, what responses followed)
 * The LLM cannot directly access blob URLs used by Google Messages
 
 ## Requesting Image Data
+ 
 * The LLM can request image data by responding: `{"requestImage": "blob:https://messages.google.com/..."}`
 * The extension fetches the image, optimizes it, and makes a follow-up API request with the image data
 * Only one image can be requested at a time
@@ -227,17 +179,20 @@ Images in the conversation are optimized for LLM consumption using an on-demand 
 * When viewing an image, the LLM should consider adding a description to the summary for future context
 
 ## Image Optimization
+ 
 * Long edge is scaled to a multiple of 448 pixels (matching vision model tile size)
 * Maximum dimension is 1344 pixels (448 × 3 tiles)
 * Images are compressed as JPEG with 0.8 quality
 * Optimized images are sent as base64 data URLs
 
 ## Image Caching
+ 
 * The most recently optimized image is cached in memory (by src URL)
 * Cache is also persisted to IndexedDB per-conversation (`image_cache_{conversationId}`)
 * Cache is used when the same image is requested again
 
 # Error Handling
+ 
 * Display non-blocking notifications to the user for errors (bottom-right corner, auto-dismiss)
 * Notify when the LLM service is unreachable or returns an error
 * Log detailed errors to the browser console for debugging
@@ -247,7 +202,7 @@ Images in the conversation are optimized for LLM consumption using an on-demand 
 The extension operates in one of four modes, controlled via a browser context menu (right-click).
 
 ## Uninitialized
-* The extension is not configured (missing API key, endpoint, or model)
+* The extension is not configured (missing API key, endpoint, model, or local user name)
 * This mode is automatic when configuration is incomplete
 * Not shown in the context menu
 * Other modes are unavailable until configuration is complete
@@ -276,8 +231,10 @@ The extension operates in one of four modes, controlled via a browser context me
 * Mode options are shown as radio buttons with a checkmark on the active mode
 * "Settings..." opens the configuration page
 * Mode options are disabled when in Uninitialized mode
+* A Diagnostics menu entry shows sub-menu
 
 ## Mode Transition Messages
+
 When modes change, the extension inserts a message to inform conversation participants:
 
 * **Any >> Available**: Extension inserts "[clanker] AI is available but will only reply if you address it directly by name."
@@ -289,11 +246,13 @@ The LLM-generated activation message receives context about the conversation and
 # Extension Storage
 
 ## IndexedDB (persistent)
+
 * Uses IndexedDB database "ClankerDB" with object store "settings"
 * Shared storage module (storage.js) provides async get/set/remove/clear operations
 * Works in both page context and service worker context
 
 ### Global Settings
+
 * `apiEndpoint` - LLM API endpoint URL
 * `apiKey` - LLM API key
 * `model` - LLM model identifier
@@ -302,23 +261,28 @@ The LLM-generated activation message receives context about the conversation and
 * `relaxedResponsiveness` - Enable human-like reading/typing delays (boolean, default true)
 
 ### Per-Conversation Data
+
 * `mode_{conversationId}` - Operating mode for the conversation
 * `summary_{conversationId}` - LLM-generated conversation summary
 * `customization_{conversationId}` - Active persona/style directive
+* TODO - document participant profile data
 * `lastMessage_{conversationId}` - Last processed message (id, content, sender) for hybrid tracking
 * `image_cache_{conversationId}` - Cached optimized image data
 
 ## Per-Conversation Mode Storage
+
 * Operating mode is stored per-conversation in IndexedDB (`mode_{conversationId}`)
 * Mode persists across browser sessions and tab closures
 * Mode is restored when returning to a conversation
 * New/unknown conversations default to Deactivated
 
 ## API Endpoint Validation
+
 * Endpoint URL must be valid http:// or https:// URL
 * Non-localhost endpoints must use https://
 * Localhost URLs (localhost, 127.0.0.1, ::1, *.local) may use http:// for local LLM development
 * Validation occurs both when saving settings and before each API request
+* TODO - document endpoint overrides (currently only xAI)
 
 # Sidebar Inactive Conversation Processing
 
@@ -328,22 +292,11 @@ The extension can only interact with the single foreground conversation loaded i
 
 A settings dropdown ("Inactive Conversation Response") controls behavior with three options:
 
-* **Ignore new messages** (default) — Sidebar is not monitored at all. No observer is created, no processing occurs.
-* **Process new messages** — New messages in non-foreground conversations are processed as soon as the foreground is available (user is not typing, no LLM request in flight, no pending response timer, no conversation change in progress).
-* **Respond when idle (10min)** — New messages are queued but only processed after 10 minutes of foreground inactivity. Activity is defined as receiving new messages, user input activity, or LLM activity.
+* **Ignore new messages** (default): Sidebar is not monitored at all. No observer is created, no processing occurs.
+* **Process new messages**: New messages in non-foreground conversations are processed as soon as the foreground is available (user is not typing, no LLM request in flight, no pending response timer, no conversation change in progress).
+* **Respond when idle (10min)**: New messages are queued but only processed after 10 minutes of foreground inactivity. Activity is defined as receiving new messages, user input activity, or LLM activity.
 
 The setting is stored in IndexedDB as `sidebarMode`.
-
-## Sidebar DOM Structure
-
-Each conversation in the sidebar is an anchor element:
-* Selector: `a[data-e2e-conversation]`
-* Conversation ID: extracted from the `href` attribute via `/conversations/([^/?#]+)`
-* Participant names: `[data-e2e-conversation-name]` element text
-* Message snippet: `mws-conversation-snippet span` element text (format: `"Sender: message text"` or `"You: message text"`)
-* State flags: `data-e2e-is-pinned`, `data-e2e-is-muted`, `data-e2e-is-unread` (string booleans)
-* Selected state: `aria-selected="true"` indicates the foreground conversation
-* The conversation list container is the `<mws-conversations-list>` element
 
 ## Change Detection
 
