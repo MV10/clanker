@@ -1189,27 +1189,24 @@ async function handleDiagDeactivateAll(tabId) {
 }
 
 /**
- * Handle diagnostic: Reset current conversation state
+ * Handle diagnostic: Purge current conversation state
+ * Mode is preserved by the content script — no mode change here.
  */
 async function handleDiagResetConversation(tabId) {
   try {
-    // Tell content script to reset conversation state
     const response = await chrome.tabs.sendMessage(tabId, { type: 'DIAG_RESET_CONVERSATION' });
 
     if (!response?.success) {
-      console.error('[Clanker] Failed to reset conversation:', response?.error);
+      console.error('[Clanker] Failed to purge conversation:', response?.error);
     }
-
-    // Also set mode to deactivated in background
-    await handleSetMode(tabId, MODES.DEACTIVATED);
-
   } catch (error) {
-    console.error('[Clanker] Reset conversation error:', error);
+    console.error('[Clanker] Purge conversation error:', error);
   }
 }
 
 /**
- * Handle diagnostic: Reset all state data
+ * Handle diagnostic: Purge all state data
+ * Mode is preserved by the content script — no mode change here.
  */
 async function handleDiagResetAll(tabId) {
   try {
@@ -1217,7 +1214,7 @@ async function handleDiagResetAll(tabId) {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        return confirm('Reset ALL Clanker state data?\n\nThis will delete all stored data for all conversations including modes, summaries, and customizations.\n\nConfiguration (API key, model, etc.) will be preserved.\n\nThis action cannot be undone.');
+        return confirm('Purge ALL Clanker state data?\n\nThis will delete all stored data for all conversations including summaries, customizations, and profiles.\n\nAI participation mode and configuration (API key, model, etc.) will be preserved.\n\nThis action cannot be undone.');
       }
     });
 
@@ -1243,16 +1240,13 @@ async function handleDiagResetAll(tabId) {
       await Storage.set(configToRestore);
     }
 
-    // Tell content script to reinitialize
+    // Tell content script to reinitialize (it preserves and re-saves current mode)
     await chrome.tabs.sendMessage(tabId, { type: 'DIAG_REINITIALIZE' });
 
-    // Set mode to deactivated
-    await handleSetMode(tabId, MODES.DEACTIVATED);
-
-    console.log('[Clanker] All state data reset (configuration preserved)');
+    console.log('[Clanker] All state data purged (configuration preserved)');
 
   } catch (error) {
-    console.error('[Clanker] Reset all error:', error);
+    console.error('[Clanker] Purge all error:', error);
   }
 }
 

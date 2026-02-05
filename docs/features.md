@@ -125,11 +125,11 @@ To bound token growth and manage context efficiently, the extension uses a hybri
 * Some models occasionally ignore the instructions to always return JSON
 * The LLM is instructed to respond with JSON as follows:
  
-* For a text-response: `{"response": "message", "summary": "...", "customization": "..."}`
-* TODO - document participant profile array
+* For a text-response: `{"response": "message", "summary": "...", "customization": "...", "profiles": {...}}`
 * The `response` field contains the chat message (without [clanker] prefix), or `null` to skip responding
 * The `summary` field is optional and updates the stored conversation summary
 * The `customization` field is optional and updates the stored persona/style directive
+* The `profiles` field is optional and replaces the stored participant profiles object (JSON object keyed by participant name, values are free-form notes strings)
 
 * For an image request: `{"requestImage": "blob:https://..."}`
 * The `requestImage` field can request image data using the src attribute
@@ -171,11 +171,38 @@ Users can request the LLM adopt different personas or communication styles. Thes
 * The LLM must reject requests that conflict with core behavior
 
 ## Customization Storage
- 
+
 * Customizations are stored in IndexedDB keyed by conversation ID (`customization_{conversationId}`)
 * Customizations persist across browser sessions
 * Customizations are separate from summaries (different purposes, different update frequency)
 * Customizations are cleared when switching conversations
+
+# Participant Profiles
+
+The LLM maintains per-participant notes tracking interests, opinions, preferences, and personal details mentioned in conversation. These are used to personalize responses and demonstrate awareness of each person.
+
+## How Profiles Work
+
+* The LLM observes conversation and builds notes about each participant
+* Profiles are stored as a JSON object keyed by participant name (e.g. `{"Alice": "Enjoys hiking and Italian food.", "Bob": "Software engineer."}`)
+* Profiles are sent with each LLM request as `[PARTICIPANT PROFILES]`
+* The LLM can update profiles by returning `{"profiles": {name: "notes", ...}}`
+* Profile updates replace the entire object (the LLM must include all existing profiles, not just changed ones)
+* If no changes are needed, the LLM omits the `profiles` field entirely
+
+## When Profiles Are Updated
+
+* When a participant reveals interests, hobbies, or preferences
+* When opinions or stances on topics are expressed
+* When personal details are mentioned (job, location, family, etc.)
+* When the LLM learns something that would help it engage naturally
+
+## Profile Storage
+
+* Profiles are stored in IndexedDB keyed by conversation ID (`profiles_{conversationId}`)
+* Profiles persist across browser sessions
+* Profiles are separate from summaries and customizations
+* Profiles are loaded fresh when switching conversations
 
 # Image Handling
 
@@ -210,10 +237,29 @@ Images in the conversation are optimized for LLM consumption using an on-demand 
 * Cache is used when the same image is requested again
 
 # Error Handling
- 
+
 * Display non-blocking notifications to the user for errors (bottom-right corner, auto-dismiss)
 * Notify when the LLM service is unreachable or returns an error
 * Log detailed errors to the browser console for debugging
+
+## Error Classification
+
+API errors are classified by HTTP status code and response body into categories with different handling:
+
+* **auth** (401, 403): Invalid API key or access denied. Auto-deactivates to stop wasting requests.
+* **quota** (402, 403, 429 with quota indicators): API quota or billing issue. Auto-deactivates.
+* **rate_limit** (429 without quota indicators): Transient. Logged only; next message will retry naturally.
+* **server** (500, 502, 503): Transient server error. Notification shown on first occurrence, suppressed on consecutive repeats.
+* **network** (fetch failures): Connection error. Same suppression as server errors.
+* **model** (404): Model or endpoint not found. Always shown.
+
+## Auto-Deactivation
+
+When a fatal error is detected (auth or quota), the extension:
+* Sets mode directly to Deactivated (without sending a deactivation SMS, which would also fail)
+* Cancels pending responses
+* Saves the deactivated mode to storage
+* Shows a persistent warning banner explaining the error
 
 # Operating Modes
 
@@ -251,6 +297,24 @@ The extension operates in one of four modes, controlled via a browser context me
 * Mode options are disabled when in Uninitialized mode
 * A Diagnostics menu entry shows sub-menu
 
+## Diagnostics Menu
+
+The context menu includes a Diagnostics submenu with the following options:
+
+* **Show Conversation State**: Opens a new tab displaying runtime state, stored data (mode, summary, customization, profiles, last message), and recent messages for the current conversation.
+* **Show Conversation State (Sanitized)**: Same as above but with participant names, message content, IDs, and URLs redacted for safe public sharing (e.g. for support requests).
+* **Deactivate In All Conversations**: Deactivates the current foreground conversation (with the usual deactivation message and debugger detach), then sets all other stored per-conversation modes to deactivated.
+* **Purge Conversation State**: Deletes all stored data for the current conversation (summary, customization, profiles, image cache, last message). The current AI participation mode is preserved and re-saved.
+* **Purge All State Data...**: After confirmation, deletes all stored data for all conversations. Configuration (API key, model, etc.) and the current conversation's AI participation mode are preserved.
+
+### Purge Implementation Notes
+
+* `state.deferredResponse` is cleared before re-parsing to prevent deferred response delivery from immediately re-saving purged data
+* Mode is preserved in memory, then re-saved to storage after the purge completes
+* The background script does not force mode changes after purge operations
+* Purge Conversation State uses a single batched `Storage.remove()` call
+* Purge All State Data uses `Storage.clear()` followed by config restore in the background, then the content script reinitializes and re-saves the preserved mode
+
 ## Mode Transition Messages
 
 When modes change, the extension inserts a message to inform conversation participants:
@@ -276,14 +340,20 @@ The LLM-generated activation message receives context about the conversation and
 * `model` - LLM model identifier
 * `userName` - Local user's display name (replaces "You" in LLM context)
 * `historySize` - Number of recent messages to send literally (10-500, default 20)
+* `sidebarMode` - Inactive conversation response mode (ignore/process/idle, default ignore)
+* `webSearch` - Allow LLM to use web search tools (boolean, default false)
 * `relaxedResponsiveness` - Enable human-like reading/typing delays (boolean, default true)
+* `newsSearch` - Allow idle-time news searches (boolean, default false)
+* `newsMaxSearches` - Maximum web searches per news check (1-100, default 10)
+* `newsQuietStart` - Quiet hours start (0-23, default 21)
+* `newsQuietStop` - Quiet hours stop (0-23, default 9)
 
 ### Per-Conversation Data
 
 * `mode_{conversationId}` - Operating mode for the conversation
 * `summary_{conversationId}` - LLM-generated conversation summary
 * `customization_{conversationId}` - Active persona/style directive
-* TODO - document participant profile data
+* `profiles_{conversationId}` - Participant profiles (JSON object keyed by name, values are notes strings)
 * `lastMessage_{conversationId}` - Last processed message (id, content, sender) for hybrid tracking
 * `image_cache_{conversationId}` - Cached optimized image data
 
@@ -300,7 +370,29 @@ The LLM-generated activation message receives context about the conversation and
 * Non-localhost endpoints must use https://
 * Localhost URLs (localhost, 127.0.0.1, ::1, *.local) may use http:// for local LLM development
 * Validation occurs both when saving settings and before each API request
-* TODO - document endpoint overrides (currently only xAI)
+
+## Provider Detection and API Adaptation
+
+The background script detects the API provider from the endpoint URL hostname and adapts request/response formats accordingly. Detected providers: `xai`, `anthropic`, `openai`, `generic`.
+
+### Endpoint Path
+* xAI with web search: uses `/responses` (Responses API)
+* All others: uses `/chat/completions` (Chat Completions API)
+
+### Request Body
+* xAI with web search: `input` array + `tools: [{type: "web_search"}]`
+* xAI without web search: standard Chat Completions format
+* Anthropic with web search: `tools: [{type: "web_search_20250305", name: "web_search"}]`
+* OpenAI with web search: `web_search_options: {}`
+* Generic: no web search support (format unknown, would likely cause errors)
+
+### Response Parsing
+* xAI with web search: extracts text from `output[].content[].text` (Responses API format)
+* All others: extracts from `choices[0].message.content` (Chat Completions format)
+
+### Image Data Format
+* xAI: `input_text`/`input_image` content parts with flat `image_url` string
+* All others: `text`/`image_url` content parts with nested `{url, detail}` object
 
 # Sidebar Inactive Conversation Processing
 
@@ -402,3 +494,34 @@ If an LLM request is in-flight when the user switches conversations (including s
 * If the last message ID still matches (no new messages arrived while away), the deferred response is delivered
 * If new messages arrived, the deferred response is discarded (stale context)
 * Only one deferred response is stored at a time (single slot, in-memory only)
+
+# Idle-Time News Search
+
+When enabled, the extension periodically searches for news relevant to conversation participants during idle periods.
+
+## Configuration
+
+* **Enable**: "Allow idle-time news searches" checkbox in settings (off by default)
+* **Max searches**: Maximum web searches per news check (1-100, default 10)
+* **Quiet hours**: Start/stop hours in 24-hour format (default 21:00 to 09:00). Handles midnight wrap-around. No searches during quiet hours.
+
+## Trigger Conditions
+
+All of the following must be true for a news search to fire:
+* News search is enabled in settings
+* Mode is Active or Available
+* Conversation has been idle for at least 2 hours (no new messages)
+* At least 1 hour since the last news check
+* Current time is not within quiet hours
+* No LLM request is in flight
+
+Conditions are checked every 5 minutes via a timer started when mode changes or config is loaded.
+
+## Behavior
+
+* The LLM receives a special instruction to search the web for news relevant to conversation participants based on their profiles and recent topics
+* The LLM is instructed to apply a high bar: only comment on truly remarkable, unusual, or highly relevant findings
+* Most checks should result in a null response (no message sent)
+* If the LLM has no participant profile data, it should not respond
+* News responses are delivered with typing simulation when relaxed mode is on
+* The timer is stopped when mode changes to Deactivated or when news search is disabled

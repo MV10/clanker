@@ -209,7 +209,9 @@
   }
 
   /**
-   * Handle diagnostic: Reset current conversation state
+   * Handle diagnostic: Purge current conversation state
+   * Deletes all stored data for the current conversation except mode.
+   * AI participation (mode) is preserved so the user doesn't have to re-activate.
    */
   async function handleDiagResetConversation() {
     try {
@@ -217,23 +219,25 @@
         return { success: false, error: 'No conversation active' };
       }
 
-      // Delete stored data for this conversation
-      const modeKey = `mode_${state.currentConversationId}`;
-      const summaryKey = `summary_${state.currentConversationId}`;
-      const customizationKey = `customization_${state.currentConversationId}`;
-      const profilesKey = `profiles_${state.currentConversationId}`;
-      const imageCacheKey = `image_cache_${state.currentConversationId}`;
-      const lastMessageKey = `lastMessage_${state.currentConversationId}`;
+      // Preserve the current mode (AI participation should not change)
+      const preservedMode = state.mode;
 
-      await Storage.remove(modeKey);
-      await Storage.remove(summaryKey);
-      await Storage.remove(customizationKey);
-      await Storage.remove(profilesKey);
-      await Storage.remove(imageCacheKey);
-      await Storage.remove(lastMessageKey);
+      // Clear deferred response BEFORE re-parsing to prevent it from
+      // re-saving the data we're about to delete
+      state.deferredResponse = null;
 
-      // Reset runtime state
-      state.mode = MODES.DEACTIVATED;
+      // Delete all stored data for this conversation in a single batch
+      const id = state.currentConversationId;
+      await Storage.remove([
+        `mode_${id}`,
+        `summary_${id}`,
+        `customization_${id}`,
+        `profiles_${id}`,
+        `image_cache_${id}`,
+        `lastMessage_${id}`
+      ]);
+
+      // Reset runtime state (but preserve mode)
       state.conversationSummary = null;
       state.conversationCustomization = null;
       state.conversationProfiles = null;
@@ -241,13 +245,17 @@
       state.processedMessageIds.clear();
       LLM.cancelPendingResponse();
 
-      // Re-parse the conversation
+      // Restore the preserved mode to both runtime and storage
+      state.mode = preservedMode;
+      await ConversationStorage.saveConversationMode(preservedMode);
+
+      // Re-parse the conversation (deferredResponse is null, so no data will be re-saved)
       if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
         window.ClankerMessages.parseExistingConversation();
       }
 
-      console.log('[Clanker] Conversation state reset');
-      showNotification('Conversation state reset', 'success');
+      console.log('[Clanker] Conversation state purged (mode preserved:', preservedMode + ')');
+      showNotification('Conversation state purged', 'success');
 
       return { success: true };
     } catch (error) {
@@ -256,14 +264,22 @@
   }
 
   /**
-   * Handle diagnostic: Reinitialize after full reset
+   * Handle diagnostic: Reinitialize after full state purge
+   * Called by background after Storage.clear() + config restore.
+   * AI participation (mode) is preserved so the user doesn't have to re-activate.
    */
   async function handleDiagReinitialize() {
     try {
+      // Preserve the current mode (AI participation should not change)
+      const preservedMode = state.mode;
+
+      // Clear deferred response BEFORE re-parsing to prevent it from
+      // re-saving the data we just purged
+      state.deferredResponse = null;
+
       // Reset all runtime state
       state.initialized = false;
       state.initializing = false;
-      state.mode = MODES.DEACTIVATED;
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
@@ -278,15 +294,23 @@
       const conversationId = Parser.detectConversationId();
       if (conversationId) {
         state.currentConversationId = conversationId;
+
+        // Restore the preserved mode to both runtime and storage
+        state.mode = preservedMode;
+        await ConversationStorage.saveConversationMode(preservedMode);
+
+        // Re-parse (deferredResponse is null, so no data will be re-saved)
         if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
           window.ClankerMessages.parseExistingConversation();
         }
+      } else {
+        state.mode = preservedMode;
       }
 
       state.initialized = true;
 
-      console.log('[Clanker] Reinitialized after full reset');
-      showNotification('All state data reset', 'success');
+      console.log('[Clanker] Reinitialized after full purge (mode preserved:', preservedMode + ')');
+      showNotification('All state data purged', 'success');
 
       return { success: true };
     } catch (error) {
