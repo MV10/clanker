@@ -17,40 +17,40 @@
       <fieldset>
         <legend>Required Configuration</legend>
 
-        <label for="api-endpoint">API Endpoint</label>
+        <label for="api-endpoint">API endpoint</label>
         <input type="url" id="api-endpoint" name="apiEndpoint"
                placeholder="https://api.openai.com/v1" required>
 
         <label for="api-key">API Key</label>
         <input type="password" id="api-key" name="apiKey"
-               placeholder="sk-..." required>
+               placeholder="xai-..." required>
 
         <label for="model">Model</label>
         <input type="text" id="model" name="model"
                placeholder="gpt-4" required>
 
-        <label for="user-name">Your Name</label>
+        <label for="user-name">Your name</label>
         <input type="text" id="user-name" name="userName"
-               placeholder="How others see your messages">
+               placeholder="How others and the AI refers to you">
       </fieldset>
 
       <fieldset>
         <legend>Options and Features</legend>
 
-        <label for="history-size">Message History Size (10 to 500, 50 recommended)</label>
+        <label for="history-size">Message history size (10 to 500, 50 recommended)</label>
         <input type="number" id="history-size" name="historySize"
                min="10" max="500" placeholder="20">
 
-        <label for="sidebar-mode">Inactive Conversation Response</label>
+        <label for="sidebar-mode">Inactive conversation response</label>
         <select id="sidebar-mode" name="sidebarMode">
           <option value="ignore">Ignore new messages</option>
-          <option value="process">Process new messages</option>
-          <option value="idle">Respond when idle (10min)</option>
+          <option value="process">Process new messages immediately</option>
+          <option value="idle">Respond when idle for 10 minutes</option>
         </select>
 
         <label class="checkbox-label">
           <input type="checkbox" id="web-search" name="webSearch">
-          Allow web searches (probably not free)
+          Allow web searches (most providers charge extra)
         </label>
 
         <label class="checkbox-label">
@@ -67,7 +67,7 @@
         <input type="number" id="news-max-searches" name="newsMaxSearches"
                min="1" max="100" placeholder="10">
 
-        <label>Quiet hours start/stop (24hrs)</label>
+        <label>News search quiet hours (start/stop, 24hrs)</label>
         <div class="inline-inputs">
           <input type="number" id="news-quiet-start" name="newsQuietStart"
                  min="0" max="23" placeholder="21">
