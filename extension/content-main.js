@@ -6,6 +6,8 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'Main';
   const Parser = window.ClankerParser;
   const Storage = window.ClankerStorage;
   const { state, MODES } = window.ClankerState;
@@ -19,12 +21,12 @@
   async function initialize() {
     // Prevent duplicate initialization (check both flag and in-progress state)
     if (state.initialized || state.initializing) {
-      console.log('[Clanker] Already initialized or initializing, skipping');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Already initialized or initializing, skipping');
       return;
     }
     state.initializing = true;
 
-    console.log('[Clanker] Initializing...');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'Initializing...');
 
     // Load configuration and mode
     const configResponse = await chrome.runtime.sendMessage({ type: 'GET_CONFIG' });
@@ -69,7 +71,7 @@
 
     state.initializing = false;
     state.initialized = true;
-    console.log('[Clanker] Initialized successfully, mode:', state.mode);
+    Log.info(LOG_SOURCE, state.currentConversationId, 'Initialized successfully, mode:', state.mode);
   }
 
   /**
@@ -81,7 +83,7 @@
   function attemptInitialConversationDetection() {
     const conversationId = Parser.detectConversationId();
     if (conversationId) {
-      console.log('[Clanker] Conversation detected:', conversationId);
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Conversation detected:', conversationId);
       state.conversationChanging = true;
       state.parseComplete = false;
       handleConversationChange(conversationId).then(() => {
@@ -99,7 +101,7 @@
     // The conversation observer will also catch URL-based changes, but this
     // handles the case where the URL already points to a conversation whose
     // DOM elements haven't rendered yet.
-    console.log('[Clanker] No conversation detected yet, will retry in 1s');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'No conversation detected yet, will retry in 1s');
     setTimeout(() => {
       // Don't retry if a conversation was already picked up by the conversation observer
       if (!state.currentConversationId) {
@@ -209,7 +211,9 @@
   }
 
   /**
-   * Handle diagnostic: Reset current conversation state
+   * Handle diagnostic: Purge current conversation state
+   * Deletes all stored data for the current conversation except mode.
+   * AI participation (mode) is preserved so the user doesn't have to re-activate.
    */
   async function handleDiagResetConversation() {
     try {
@@ -217,23 +221,25 @@
         return { success: false, error: 'No conversation active' };
       }
 
-      // Delete stored data for this conversation
-      const modeKey = `mode_${state.currentConversationId}`;
-      const summaryKey = `summary_${state.currentConversationId}`;
-      const customizationKey = `customization_${state.currentConversationId}`;
-      const profilesKey = `profiles_${state.currentConversationId}`;
-      const imageCacheKey = `image_cache_${state.currentConversationId}`;
-      const lastMessageKey = `lastMessage_${state.currentConversationId}`;
+      // Preserve the current mode (AI participation should not change)
+      const preservedMode = state.mode;
 
-      await Storage.remove(modeKey);
-      await Storage.remove(summaryKey);
-      await Storage.remove(customizationKey);
-      await Storage.remove(profilesKey);
-      await Storage.remove(imageCacheKey);
-      await Storage.remove(lastMessageKey);
+      // Clear deferred response BEFORE re-parsing to prevent it from
+      // re-saving the data we're about to delete
+      state.deferredResponse = null;
 
-      // Reset runtime state
-      state.mode = MODES.DEACTIVATED;
+      // Delete all stored data for this conversation in a single batch
+      const id = state.currentConversationId;
+      await Storage.remove([
+        `mode_${id}`,
+        `summary_${id}`,
+        `customization_${id}`,
+        `profiles_${id}`,
+        `image_cache_${id}`,
+        `lastMessage_${id}`
+      ]);
+
+      // Reset runtime state (but preserve mode)
       state.conversationSummary = null;
       state.conversationCustomization = null;
       state.conversationProfiles = null;
@@ -241,13 +247,17 @@
       state.processedMessageIds.clear();
       LLM.cancelPendingResponse();
 
-      // Re-parse the conversation
+      // Restore the preserved mode to both runtime and storage
+      state.mode = preservedMode;
+      await ConversationStorage.saveConversationMode(preservedMode);
+
+      // Re-parse the conversation (deferredResponse is null, so no data will be re-saved)
       if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
         window.ClankerMessages.parseExistingConversation();
       }
 
-      console.log('[Clanker] Conversation state reset');
-      showNotification('Conversation state reset', 'success');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Conversation state purged (mode preserved:', preservedMode + ')');
+      showNotification('Conversation state purged', 'success');
 
       return { success: true };
     } catch (error) {
@@ -256,14 +266,22 @@
   }
 
   /**
-   * Handle diagnostic: Reinitialize after full reset
+   * Handle diagnostic: Reinitialize after full state purge
+   * Called by background after Storage.clear() + config restore.
+   * AI participation (mode) is preserved so the user doesn't have to re-activate.
    */
   async function handleDiagReinitialize() {
     try {
+      // Preserve the current mode (AI participation should not change)
+      const preservedMode = state.mode;
+
+      // Clear deferred response BEFORE re-parsing to prevent it from
+      // re-saving the data we just purged
+      state.deferredResponse = null;
+
       // Reset all runtime state
       state.initialized = false;
       state.initializing = false;
-      state.mode = MODES.DEACTIVATED;
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
@@ -278,15 +296,23 @@
       const conversationId = Parser.detectConversationId();
       if (conversationId) {
         state.currentConversationId = conversationId;
+
+        // Restore the preserved mode to both runtime and storage
+        state.mode = preservedMode;
+        await ConversationStorage.saveConversationMode(preservedMode);
+
+        // Re-parse (deferredResponse is null, so no data will be re-saved)
         if (window.ClankerMessages && window.ClankerMessages.parseExistingConversation) {
           window.ClankerMessages.parseExistingConversation();
         }
+      } else {
+        state.mode = preservedMode;
       }
 
       state.initialized = true;
 
-      console.log('[Clanker] Reinitialized after full reset');
-      showNotification('All state data reset', 'success');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Reinitialized after full purge (mode preserved:', preservedMode + ')');
+      showNotification('All state data purged', 'success');
 
       return { success: true };
     } catch (error) {
@@ -302,12 +328,12 @@
 
     // Ignore if mode hasn't actually changed
     if (oldMode === newMode) {
-      console.log(`[Clanker] Mode unchanged: ${newMode}`);
+      Log.info(LOG_SOURCE, state.currentConversationId, `Mode unchanged: ${newMode}`);
       return;
     }
 
     state.mode = newMode;
-    console.log(`[Clanker] Mode changed: ${oldMode} -> ${newMode}`);
+    Log.info(LOG_SOURCE, state.currentConversationId, `Mode changed: ${oldMode} -> ${newMode}`);
 
     // Save mode for this conversation
     ConversationStorage.saveConversationMode(newMode);
@@ -339,7 +365,7 @@
    */
   async function handleConversationChange(newConversationId) {
     if (state.currentConversationId && state.currentConversationId !== newConversationId) {
-      console.log('[Clanker] Conversation changed, resetting state');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Conversation changed, resetting state');
       state.conversation = null;
       state.conversationSummary = null;
       state.conversationCustomization = null;
@@ -360,7 +386,7 @@
       await ConversationStorage.loadLastProcessedMessage();
     } catch (e) {
       // Storage may fail if extension context invalidated
-      console.warn('[Clanker] Could not load conversation data');
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Could not load conversation data');
     }
 
     // Start news timer if mode is active/available (restoring from stored mode)
@@ -390,7 +416,7 @@
     banner.appendChild(text);
     banner.appendChild(dismissBtn);
     document.body.appendChild(banner);
-    console.warn('[Clanker]', message);
+    Log.warn(LOG_SOURCE, state.currentConversationId, message);
   }
 
   /**
@@ -423,7 +449,7 @@
       }
     }, 5000);
 
-    console.log(`[Clanker] Notification (${type}):`, message);
+    Log.info(LOG_SOURCE, state.currentConversationId, `Notification (${type}):`, message);
   }
 
   /**
@@ -436,7 +462,7 @@
     if (!window.ClankerMessages || !window.ClankerMessages.isUserTyping()) {
       return Promise.resolve(true);
     }
-    console.log('[Clanker] User is typing, waiting for input to clear before sending');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'User is typing, waiting for input to clear before sending');
     return new Promise(resolve => {
       let elapsed = 0;
       const interval = 500;
@@ -444,11 +470,11 @@
         elapsed += interval;
         if (!window.ClankerMessages.isUserTyping()) {
           clearInterval(timer);
-          console.log('[Clanker] Input cleared, proceeding with send');
+          Log.info(LOG_SOURCE, state.currentConversationId, 'Input cleared, proceeding with send');
           resolve(true);
         } else if (elapsed >= timeoutMs) {
           clearInterval(timer);
-          console.warn('[Clanker] Timed out waiting for input to clear, sending anyway');
+          Log.warn(LOG_SOURCE, state.currentConversationId, 'Timed out waiting for input to clear, sending anyway');
           resolve(false);
         }
       }, interval);
@@ -456,15 +482,41 @@
   }
 
   /**
-   * Send a message using main world injection via background script
-   * This ensures Angular recognizes the input and click.
-   * If the user is typing, waits for the input field to clear first
-   * to avoid destroying their in-progress text.
+   * Send a message using main world injection via background script.
+   * Serialized: each call waits for the previous one to complete before starting.
+   * This prevents overlapping typing simulations from corrupting each other
+   * (e.g. a second LLM response trying to type while the first is still being typed).
    * @param {string} text - Message text to send
    * @param {Object|null} typingParams - Typing simulation params, or null
-   * @param {number} _retryCount - Internal retry counter for user_typing races
    */
-  async function sendMessage(text, typingParams = null, _retryCount = 0) {
+  let sendMessageQueue = Promise.resolve();
+
+  async function sendMessage(text, typingParams = null) {
+    // Serialize: wait for any previous sendMessage to complete
+    const previous = sendMessageQueue;
+    let resolveQueue;
+    sendMessageQueue = new Promise(r => { resolveQueue = r; });
+    await previous;
+
+    // Flag that a message send is in progress (including typing simulation).
+    // This prevents sidebar processing from navigating away mid-send,
+    // and prevents attemptResponse from misinterpreting extension typing as user typing.
+    state.sendingMessage = true;
+    try {
+      return await doSendMessage(text, typingParams, 0);
+    } finally {
+      state.sendingMessage = false;
+      resolveQueue();
+    }
+  }
+
+  /**
+   * Internal: attempt to send a message with retry logic for user_typing races.
+   * @param {string} text
+   * @param {Object|null} typingParams
+   * @param {number} retryCount
+   */
+  async function doSendMessage(text, typingParams, retryCount) {
     // Wait for the user to finish typing before injecting into the input field
     await waitForInputClear();
 
@@ -476,16 +528,21 @@
       const response = await chrome.runtime.sendMessage(payload);
       if (!response.success) {
         // Handle race condition: user started typing between waitForInputClear and MAIN world script
-        if (response.error === 'user_typing' && _retryCount < 5) {
-          console.log('[Clanker] User typing detected at send time, retrying (' + (_retryCount + 1) + '/5)');
+        if (response.error === 'user_typing' && retryCount < 5) {
+          Log.info(LOG_SOURCE, state.currentConversationId, 'User typing detected at send time, retrying (' + (retryCount + 1) + '/5)');
           await new Promise(resolve => setTimeout(resolve, 1000));
-          return sendMessage(text, typingParams, _retryCount + 1);
+          return doSendMessage(text, typingParams, retryCount + 1);
         }
-        showNotification('Failed to send message: ' + response.error, 'error');
+        if (response.error === 'user_typing') {
+          // Don't show visible notification — the user doesn't need to know
+          Log.warn(LOG_SOURCE, state.currentConversationId, 'Send abandoned: textarea still occupied after retries');
+        } else {
+          showNotification('Failed to send message: ' + response.error, 'error');
+        }
       }
       return response.success;
     } catch (err) {
-      console.error('[Clanker] Send message error:', err);
+      Log.error(LOG_SOURCE, state.currentConversationId, 'Send message error:', err);
       showNotification('Failed to send message', 'error');
       return false;
     }

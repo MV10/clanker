@@ -6,6 +6,8 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'Messages';
   const Parser = window.ClankerParser;
   const { state, MODES } = window.ClankerState;
   const ConversationStorage = window.ClankerConversationStorage;
@@ -17,7 +19,7 @@
   function isUserTyping() {
     const inputContainer = Parser.getInputField();
     if (!inputContainer) {
-      console.log('[Clanker] isUserTyping: no input field found');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'isUserTyping: no input field found');
       return false;
     }
 
@@ -31,7 +33,7 @@
     const isUIText = /^(SMS|RCS)(\s+(SMS|RCS))*$/i.test(content);
     const isTyping = content.length > 0 && !isUIText;
 
-    console.log('[Clanker] isUserTyping:', isTyping, 'content:', JSON.stringify(content));
+    Log.info(LOG_SOURCE, state.currentConversationId, 'isUserTyping:', isTyping, 'content:', JSON.stringify(content));
     return isTyping;
   }
 
@@ -55,14 +57,14 @@
     const messageElements = Parser.findMessageElements(node);
 
     if (messageElements.length > 0) {
-      console.log('[Clanker] Found', messageElements.length, 'message wrapper(s) in new DOM node');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Found', messageElements.length, 'message wrapper(s) in new DOM node');
 
       // Delay processing to allow aria-labels to be fully populated
       // Google Messages populates these asynchronously
       setTimeout(() => {
         // Re-check guards inside timeout - state may have changed
         if (state.conversationChanging || !state.parseComplete) {
-          console.log('[Clanker] Skipping message processing - conversation change in progress');
+          Log.info(LOG_SOURCE, state.currentConversationId, 'Skipping message processing - conversation change in progress');
           return;
         }
         for (const el of messageElements) {
@@ -85,11 +87,11 @@
     // Check for automated-message conversations (participant is a digits-only number, 1-10 digits).
     // Use header names first (available before messages load), fall back to parsed participants.
     const headerNames = Parser.extractParticipantNames();
-    console.log('[Clanker] A2P check — headerNames:', JSON.stringify(headerNames),
+    Log.info(LOG_SOURCE, state.currentConversationId, 'A2P check — headerNames:', JSON.stringify(headerNames),
       'participants:', JSON.stringify([...state.conversation.participants]));
     if (Parser.hasAutomatedParticipant(headerNames) ||
         Parser.hasAutomatedParticipant(state.conversation.participants)) {
-      console.log('[Clanker] Automated-message conversation detected, ignoring');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Automated-message conversation detected, ignoring');
       state.conversation = null;
       state.parseComplete = true;
       chrome.runtime.sendMessage({ type: 'SET_AUTOMATED', automated: true }).catch(() => {});
@@ -99,7 +101,7 @@
     // If no messages found and we haven't retried too many times, try again
     // Large conversations may take several seconds to load from the user's phone
     if (state.conversation.messageCount === 0 && retryCount < 10) {
-      console.log(`[Clanker] No messages found yet, retrying... (${retryCount + 1}/10)`);
+      Log.info(LOG_SOURCE, state.currentConversationId, `No messages found yet, retrying... (${retryCount + 1}/10)`);
       setTimeout(() => {
         parseExistingConversation(retryCount + 1);
       }, 1000);
@@ -113,9 +115,9 @@
       }
     }
 
-    console.log(`[Clanker] Found ${state.conversation.messageCount} existing messages`);
+    Log.info(LOG_SOURCE, state.currentConversationId, `Found ${state.conversation.messageCount} existing messages`);
     if (state.conversation.participants.size > 0) {
-      console.log('[Clanker] Participants:', Array.from(state.conversation.participants));
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Participants:', Array.from(state.conversation.participants));
     }
     chrome.runtime.sendMessage({ type: 'SET_AUTOMATED', automated: false }).catch(() => {});
 
@@ -131,14 +133,14 @@
 
       // If ID not found (temp ID may have changed), try content+sender match
       if (lastIndex < 0 && state.lastProcessedMessage.content) {
-        console.log('[Clanker] ID not found, trying content+sender match');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'ID not found, trying content+sender match');
         // Search backwards from the end (the message is likely near the end)
         for (let i = messages.length - 1; i >= 0 && i >= messages.length - 20; i--) {
           const msg = messages[i];
           if (msg.content === state.lastProcessedMessage.content &&
               msg.sender === state.lastProcessedMessage.sender) {
             lastIndex = i;
-            console.log('[Clanker] Found match by content+sender at index', i);
+            Log.info(LOG_SOURCE, state.currentConversationId, 'Found match by content+sender at index', i);
             break;
           }
         }
@@ -149,7 +151,7 @@
         const newMessages = messages.slice(lastIndex + 1);
 
         if (newMessages.length > 0) {
-          console.log(`[Clanker] Found ${newMessages.length} new message(s) since last visit`);
+          Log.info(LOG_SOURCE, state.currentConversationId, `Found ${newMessages.length} new message(s) since last visit`);
 
           // Process new messages based on mode
           if (state.mode === MODES.ACTIVE || state.mode === MODES.AVAILABLE) {
@@ -157,7 +159,7 @@
           }
         }
       } else {
-        console.log('[Clanker] Last processed message not found by ID or content, skipping new message check');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Last processed message not found by ID or content, skipping new message check');
       }
     }
 
@@ -178,15 +180,15 @@
       state.deferredResponse = null;
       const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
       if (lastMsg && lastMsg.id === deferred.lastMessageId) {
-        console.log('[Clanker] Delivering deferred response for:', deferred.conversationId);
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Delivering deferred response for:', deferred.conversationId);
         deliverDeferredResponse(deferred);
       } else {
-        console.log('[Clanker] Discarding deferred response — new messages arrived');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Discarding deferred response — new messages arrived');
       }
     }
 
     state.parseComplete = true;
-    console.log('[Clanker] Parse complete');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'Parse complete');
   }
 
   /**
@@ -198,7 +200,7 @@
     const relevantMessages = newMessages.filter(m => !m.isClanker);
 
     if (relevantMessages.length === 0) {
-      console.log('[Clanker] No relevant new messages to process');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'No relevant new messages to process');
       return;
     }
 
@@ -229,11 +231,11 @@
     const alreadyResponded = messagesAfterTrigger.some(m => m.isClanker);
 
     if (alreadyResponded) {
-      console.log('[Clanker] Trigger message already has a Clanker response, skipping');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Trigger message already has a Clanker response, skipping');
       return;
     }
 
-    console.log('[Clanker] Triggering response to message from while away:', triggerMessage.id);
+    Log.info(LOG_SOURCE, state.currentConversationId, 'Triggering response to message from while away:', triggerMessage.id);
     // Call scheduleResponse from content-llm module
     if (window.ClankerLLM && window.ClankerLLM.scheduleResponse) {
       window.ClankerLLM.scheduleResponse(triggerMessage);
@@ -249,7 +251,7 @@
       // Get debug info from child parts
       const textPart = element.querySelector('mws-text-message-part');
       const imagePart = element.querySelector('mws-image-message-part');
-      console.log('[Clanker] Could not parse message wrapper:', {
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Could not parse message wrapper:', {
         messageId: element.getAttribute('data-e2e-message-id'),
         hasTextPart: !!textPart,
         textAriaLabel: textPart?.getAttribute('aria-label'),
@@ -261,7 +263,7 @@
 
     // Skip already processed messages
     if (state.processedMessageIds.has(parsed.id)) {
-      console.log('[Clanker] Message already processed:', parsed.id);
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Message already processed:', parsed.id);
       return;
     }
     state.processedMessageIds.add(parsed.id);
@@ -269,7 +271,7 @@
     // Update last processed message for this conversation
     ConversationStorage.saveLastProcessedMessage(parsed);
 
-    console.log('[Clanker] New message:', parsed);
+    Log.info(LOG_SOURCE, state.currentConversationId, 'New message:', parsed);
 
     // Update conversation context
     if (state.conversation) {

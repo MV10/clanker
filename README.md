@@ -2,7 +2,9 @@
 
 Clanker is an _**experimental**_ Chromium browser extension which allows an OpenAI-compliant LLM such as Grok, ChatGPT or even locally-hosted AIs to participate in your Google Messages browser SMS conversations.
 
-You will require an API key but costs should be very low. A real, active, 3 hour conversation between two people with participation by the Grok _grok-4-1-fast-non-reasoning_ model consumed about 1.5 cents of processing time (using January 2026 pricing, and minimal image processing).
+You will require an API key but costs should be very low. A real, active, 3 hour conversation between two people with participation by the Grok _grok-4-1-fast-non-reasoning_ model consumed about 1.5 cents of processing time (using January 2026 pricing, and minimal image processing). Note that reasoning models are strongly recommended, the system prompts seem to be too complicated for the more basic models. (For xAI, at least, the feature set and pricing are identical, it's just slightly slower to reply.)
+
+> Status: The basic functionality is working (ie. running an AI in a single conversation) but I'm still chasing bugs relating to processing in inactive conversations (the other ones in your Google Messages sidebar). There are a lot of tricky timing considerations "driving" a web app from code -- especially when other people and/or you, the user, might be typing or sending more messages.
 
 ## Installing & Updating
 

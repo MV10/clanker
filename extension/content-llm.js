@@ -6,6 +6,8 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'LLM';
   const Parser = window.ClankerParser;
   const { state, MODES, DEFAULT_HISTORY_SIZE } = window.ClankerState;
   const ConversationStorage = window.ClankerConversationStorage;
@@ -21,7 +23,7 @@
       state.pendingResponseMessageId = null;
       state.pendingAttemptResponse = null;
       state.responseTargetTime = 0;
-      console.log('[Clanker] Cancelled pending response');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Cancelled pending response');
     }
     // Increment request ID to invalidate any in-flight LLM requests
     // The in-flight request will check this ID before sending its response
@@ -80,7 +82,7 @@
       };
 
       state.pendingResponseTimer = setTimeout(attemptResponse, 0);
-      console.log('[Clanker] Scheduled immediate response (process mode):', triggerMessage.id);
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Scheduled immediate response (process mode):', triggerMessage.id);
       return;
     }
 
@@ -96,7 +98,7 @@
       clearTimeout(state.pendingResponseTimer);
       const remaining = Math.max(0, state.responseTargetTime - Date.now());
       state.pendingResponseTimer = setTimeout(state.pendingAttemptResponse, remaining);
-      console.log('[Clanker] Extended response delay by', Math.round(additional) + 'ms, remaining:', Math.round(remaining) + 'ms');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Extended response delay by', Math.round(additional) + 'ms, remaining:', Math.round(remaining) + 'ms');
       return;
     }
 
@@ -122,19 +124,21 @@
 
       // Check if this request was superseded by a newer one
       if (requestId !== state.llmRequestId) {
-        console.log('[Clanker] Request superseded, skipping response');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Request superseded, skipping response');
         return;
       }
 
-      // Check actual input content, not just cached state
-      if (window.ClankerMessages && window.ClankerMessages.isUserTyping()) {
-        console.log('[Clanker] User is typing, skipping response');
+      // Check actual input content, not just cached state.
+      // Skip this check if the extension itself is sending a message (typing simulation
+      // puts content in the textarea that isUserTyping would misidentify as user input).
+      if (!state.sendingMessage && window.ClankerMessages && window.ClankerMessages.isUserTyping()) {
+        Log.info(LOG_SOURCE, state.currentConversationId, 'User is typing, skipping response');
         return;
       }
 
       // Check mode hasn't changed
       if (state.mode === MODES.DEACTIVATED || state.mode === MODES.UNINITIALIZED) {
-        console.log('[Clanker] Mode changed, skipping response');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Mode changed, skipping response');
         return;
       }
 
@@ -142,7 +146,7 @@
       // The retry timer is stored in pendingResponseTimer so cancelPendingResponse
       // will clear it if a newer message arrives (newer message takes priority).
       if (state.llmInFlight) {
-        console.log('[Clanker] LLM request in flight, will retry after completion');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'LLM request in flight, will retry after completion');
         state.pendingResponseTimer = setTimeout(attemptResponse, 500);
         return;
       }
@@ -154,7 +158,7 @@
     state.pendingAttemptResponse = attemptResponse;  // store for Path B reuse
     state.pendingResponseTimer = setTimeout(attemptResponse, delay);
 
-    console.log('[Clanker] Scheduled response to message:', triggerMessage.id, '(request', requestId + ', delay', Math.round(delay) + 'ms)');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'Scheduled response to message:', triggerMessage.id, '(request', requestId + ', delay', Math.round(delay) + 'ms)');
   }
 
   /**
@@ -162,7 +166,7 @@
    * @param {number} requestId - The request ID to validate against
    */
   async function generateAndSendResponse(requestId) {
-    console.log('[Clanker] Generating LLM response (request', requestId + ')...');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'Generating LLM response (request', requestId + ')...');
 
     // Capture origin conversation before async work (for deferred delivery on conversation switch)
     const originConversationId = state.currentConversationId;
@@ -177,7 +181,7 @@
     const originLastMessageId = lastMessageId;
     const systemPrompt = buildSystemPrompt(olderMessageCount);
 
-    console.log('[Clanker] Sending to LLM:', {
+    Log.info(LOG_SOURCE, originConversationId, 'Sending to LLM:', {
       messageCount: recentMessages.length,
       olderMessageCount,
       hasSummary: !!state.conversationSummary,
@@ -199,7 +203,7 @@
         }
       });
 
-      console.log('[Clanker] LLM response received:', {
+      Log.info(LOG_SOURCE, originConversationId, 'LLM response received:', {
         success: response.success,
         hasContent: !!response.content,
         hasSummary: !!response.summary,
@@ -220,7 +224,7 @@
 
       // Check if this request was superseded while waiting for LLM
       if (requestId !== state.llmRequestId) {
-        console.log('[Clanker] Request', requestId, 'superseded by', state.llmRequestId);
+        Log.info(LOG_SOURCE, originConversationId, 'Request', requestId, 'superseded by', state.llmRequestId);
         // If conversation changed, defer the response for later delivery
         if (originConversationId !== state.currentConversationId && response.success && response.content) {
           state.deferredResponse = {
@@ -231,7 +235,7 @@
             profiles: response.profiles,
             lastMessageId: originLastMessageId
           };
-          console.log('[Clanker] Response deferred for conversation:', originConversationId);
+          Log.info(LOG_SOURCE, originConversationId, 'Response deferred for conversation:', originConversationId);
         }
         return;
       }
@@ -262,7 +266,7 @@
             await window.ClankerMain.sendMessage(`[clanker] ${response.content}`, typingParams);
           }
         } else {
-          console.log('[Clanker] LLM chose not to respond');
+          Log.info(LOG_SOURCE, originConversationId, 'LLM chose not to respond');
         }
 
         // Save updated summary if provided (even if response was null)
@@ -283,7 +287,7 @@
         handleLLMError(response.error, response.errorCategory);
       }
     } catch (error) {
-      console.error('[Clanker] Failed to get LLM response:', error);
+      Log.error(LOG_SOURCE, originConversationId, 'Failed to get LLM response:', error);
       handleLLMError('Unable to reach the AI service. Check your connection.', 'network');
     } finally {
       // Safety net — normally cleared above after the API call completes,
@@ -303,7 +307,7 @@
    */
   function handleLLMError(errorMessage, category) {
     state.consecutiveErrors++;
-    console.error('[Clanker] LLM error (category:', category + ', consecutive:', state.consecutiveErrors + '):', errorMessage);
+    Log.error(LOG_SOURCE, state.currentConversationId, 'LLM error (category:', category + ', consecutive:', state.consecutiveErrors + '):', errorMessage);
 
     if (category === 'quota' || category === 'auth') {
       // Fatal for this session — auto-deactivate to stop burning requests.
@@ -319,7 +323,7 @@
       state.consecutiveErrors = 0;
     } else if (category === 'rate_limit') {
       // Transient — just log, next scheduled response will retry naturally
-      console.log('[Clanker] Rate limited, will retry on next message');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'Rate limited, will retry on next message');
     } else if (category === 'server' || category === 'network') {
       // Transient — show notification only on first occurrence to avoid spam
       if (state.consecutiveErrors <= 1 && window.ClankerMain) {
@@ -339,7 +343,7 @@
   async function generateActivationMessage() {
     // Check if another LLM request is already in flight
     if (state.llmInFlight) {
-      console.log('[Clanker] LLM request in flight, using fallback activation message');
+      Log.info(LOG_SOURCE, state.currentConversationId, 'LLM request in flight, using fallback activation message');
       if (window.ClankerMain && window.ClankerMain.sendMessage) {
         window.ClankerMain.sendMessage('[clanker] AI is now active and participating in this conversation.');
       }
@@ -376,7 +380,7 @@
 
       // Check if this request was superseded while waiting for LLM
       if (requestId !== state.llmRequestId) {
-        console.log('[Clanker] Activation request superseded, discarding response');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'Activation request superseded, discarding response');
         return;
       }
 
@@ -413,9 +417,9 @@
           window.ClankerMain.sendMessage('[clanker] AI is now active and participating in this conversation.');
         }
         if (!response.success) {
-          console.error('[Clanker] Failed to generate activation message:', response.error);
+          Log.error(LOG_SOURCE, state.currentConversationId, 'Failed to generate activation message:', response.error);
         } else {
-          console.warn('[Clanker] LLM returned non-message response for activation, using fallback');
+          Log.warn(LOG_SOURCE, state.currentConversationId, 'LLM returned non-message response for activation, using fallback');
         }
       }
     } catch (error) {
@@ -423,7 +427,7 @@
       if (window.ClankerMain && window.ClankerMain.sendMessage) {
         window.ClankerMain.sendMessage('[clanker] AI is now active and participating in this conversation.');
       }
-      console.error('[Clanker] Failed to generate activation message:', error);
+      Log.error(LOG_SOURCE, state.currentConversationId, 'Failed to generate activation message:', error);
     } finally {
       state.llmInFlight = false;
     }
@@ -436,22 +440,22 @@
    * @param {string} systemPrompt - The system prompt
    */
   async function handleImageRequest(imageSrc, messages, systemPrompt) {
-    console.log('[Clanker] LLM requested image:', imageSrc);
+    Log.info(LOG_SOURCE, state.currentConversationId, 'LLM requested image:', imageSrc);
 
     // Validate the src looks like a blob URL from Google Messages
     if (!imageSrc || !imageSrc.startsWith('blob:https://messages.google.com/')) {
-      console.warn('[Clanker] Invalid image src requested:', imageSrc);
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Invalid image src requested:', imageSrc);
       return { success: false, error: 'Invalid image source' };
     }
 
     // Fetch and optimize the image (uses cache if available)
     const optimized = await Images.getOptimizedImage(imageSrc, null);
     if (!optimized) {
-      console.warn('[Clanker] Failed to fetch requested image');
+      Log.warn(LOG_SOURCE, state.currentConversationId, 'Failed to fetch requested image');
       return { success: false, error: 'Failed to fetch image' };
     }
 
-    console.log(`[Clanker] Sending image data (${optimized.width}x${optimized.height})`);
+    Log.info(LOG_SOURCE, state.currentConversationId, `Sending image data (${optimized.width}x${optimized.height})`);
 
     // Make follow-up request with image data
     try {
@@ -473,7 +477,7 @@
 
       return response;
     } catch (error) {
-      console.error('[Clanker] Failed to send image to LLM:', error);
+      Log.error(LOG_SOURCE, state.currentConversationId, 'Failed to send image to LLM:', error);
       return { success: false, error: error.message };
     }
   }
@@ -708,7 +712,7 @@
 
     // Check every 5 minutes whether the idle + interval conditions are met
     state.newsCheckTimer = setInterval(checkNewsConditions, 5 * 60 * 1000);
-    console.log('[Clanker] News timer started');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'News timer started');
   }
 
   /**
@@ -749,7 +753,7 @@
     // Check interval since last news check
     if (state.lastNewsCheckTime && (now - state.lastNewsCheckTime) < NEWS_CHECK_INTERVAL_MS) return;
 
-    console.log('[Clanker] News check conditions met, triggering search');
+    Log.info(LOG_SOURCE, state.currentConversationId, 'News check conditions met, triggering search');
     state.lastNewsCheckTime = now;
     triggerNewsSearch();
   }
@@ -823,7 +827,7 @@
       if (window.ClankerSidebar) window.ClankerSidebar.updateActivity();
 
       if (requestId !== state.llmRequestId) {
-        console.log('[Clanker] News search request superseded');
+        Log.info(LOG_SOURCE, state.currentConversationId, 'News search request superseded');
         return;
       }
 
@@ -831,7 +835,7 @@
         state.consecutiveErrors = 0;
 
         if (response.content) {
-          console.log('[Clanker] News search produced a response');
+          Log.info(LOG_SOURCE, state.currentConversationId, 'News search produced a response');
           if (window.ClankerMain && window.ClankerMain.sendMessage) {
             // Calculate typing simulation params for news responses
             const relaxed = !!state.config?.relaxedResponsiveness;
@@ -851,7 +855,7 @@
             await window.ClankerMain.sendMessage(`[clanker] ${response.content}`, typingParams);
           }
         } else {
-          console.log('[Clanker] News search found nothing noteworthy');
+          Log.info(LOG_SOURCE, state.currentConversationId, 'News search found nothing noteworthy');
         }
 
         if (response.summary) {
@@ -864,7 +868,7 @@
         handleLLMError(response.error, response.errorCategory);
       }
     } catch (error) {
-      console.error('[Clanker] News search failed:', error);
+      Log.error(LOG_SOURCE, state.currentConversationId, 'News search failed:', error);
       handleLLMError('News search failed. Check your connection.', 'network');
     } finally {
       state.llmInFlight = false;

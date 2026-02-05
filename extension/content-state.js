@@ -6,6 +6,9 @@
 (function() {
   'use strict';
 
+  const Log = window.ClankerLog;
+  const LOG_SOURCE = 'State';
+
   /**
    * Operating modes
    */
@@ -42,6 +45,7 @@
     // Concurrency control for LLM requests
     llmRequestId: 0,        // Incremented each time a response is triggered
     llmInFlight: false,     // True while an LLM request is active
+    sendingMessage: false,  // True while sendMessage is executing (includes typing simulation)
     // Conversation change guard
     conversationChanging: false,  // True while switching conversations
     parseComplete: true,          // True after parseExistingConversation completes (default true for normal operation)
@@ -101,7 +105,7 @@
    * @param {Function} showNotification - Notification function from content-main
    */
   function handleInvalidatedContext(showNotification) {
-    console.warn('[Clanker] Extension was reloaded. Please refresh this page.');
+    Log.warn(LOG_SOURCE, null, 'Extension was reloaded. Please refresh this page.');
     if (showNotification) {
       showNotification('Extension was reloaded. Please refresh this page.', 'info');
     }

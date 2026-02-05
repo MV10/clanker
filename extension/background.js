@@ -3,8 +3,11 @@
  * Handles LLM API communication and extension lifecycle
  */
 
-// Load storage module for IndexedDB access
+// Load logging and storage modules
+importScripts('logging.js');
 importScripts('storage.js');
+const Log = self.ClankerLog;
+const LOG_SOURCE = 'BG';
 const Storage = self.ClankerStorage;
 
 const STORAGE_KEYS = {
@@ -142,7 +145,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
 
     default:
-      console.warn('Unknown message type:', message.type);
+      Log.warn(LOG_SOURCE, null, 'Unknown message type:', message.type);
       sendResponse({ success: false, error: 'Unknown message type' });
   }
 });
@@ -364,7 +367,7 @@ function classifyApiError(status, errorData) {
  * Send conversation to LLM and get response
  */
 async function handleLLMRequest({ messages, systemPrompt, summary, customization, profiles, imageData }) {
-  console.log('[Clanker] handleLLMRequest called:', {
+  Log.info(LOG_SOURCE, null, 'handleLLMRequest called:', {
     messageCount: messages?.length,
     hasSystemPrompt: !!systemPrompt,
     hasSummary: !!summary,
@@ -379,7 +382,7 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
     if (!config[STORAGE_KEYS.API_ENDPOINT] ||
         !config[STORAGE_KEYS.API_KEY] ||
         !config[STORAGE_KEYS.MODEL]) {
-      console.log('[Clanker] Extension not configured');
+      Log.info(LOG_SOURCE, null, 'Extension not configured');
       return { success: false, error: 'Extension not configured' };
     }
 
@@ -451,9 +454,9 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
     const webSearch = !!config[STORAGE_KEYS.WEB_SEARCH];
     const apiUrl = getApiUrl(config[STORAGE_KEYS.API_ENDPOINT], provider, webSearch);
 
-    console.log('[Clanker] Sending API request to:', apiUrl, '(provider:', provider + ')');
-    console.log('[Clanker] Using model:', config[STORAGE_KEYS.MODEL]);
-    console.log('[Clanker] Total messages in request:', apiMessages.length);
+    Log.info(LOG_SOURCE, null, 'Sending API request to:', apiUrl, '(provider:', provider + ')');
+    Log.info(LOG_SOURCE, null, 'Using model:', config[STORAGE_KEYS.MODEL]);
+    Log.info(LOG_SOURCE, null, 'Total messages in request:', apiMessages.length);
 
     const response = await fetch(apiUrl, {
       method: 'POST',
@@ -464,17 +467,17 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
       body: JSON.stringify(buildRequestBody(config, apiMessages, provider))
     });
 
-    console.log('[Clanker] API response status:', response.status);
+    Log.info(LOG_SOURCE, null, 'API response status:', response.status);
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      console.error('[Clanker] API error:', errorData);
+      Log.error(LOG_SOURCE, null, 'API error:', errorData);
       return classifyApiError(response.status, errorData);
     }
 
     const data = await response.json();
     const rawContent = extractResponseContent(data, provider, webSearch);
-    console.log('[Clanker] Raw LLM response:', rawContent);
+    Log.info(LOG_SOURCE, null, 'Raw LLM response:', rawContent);
 
     if (!rawContent) {
       return { success: false, error: 'No response from LLM' };
@@ -482,7 +485,7 @@ async function handleLLMRequest({ messages, systemPrompt, summary, customization
 
     // Parse JSON response from LLM
     const parsed = parseLLMResponse(rawContent);
-    console.log('[Clanker] Parsed response:', parsed);
+    Log.info(LOG_SOURCE, null, 'Parsed response:', parsed);
     return {
       success: true,
       content: parsed.response,
@@ -790,18 +793,18 @@ async function handleGetMode(tabId) {
  */
 async function attachDebugger(tabId) {
   if (debuggerAttached.has(tabId)) {
-    console.log('[Clanker] Debugger already attached to tab', tabId);
+    Log.info(LOG_SOURCE, null, 'Debugger already attached to tab', tabId);
     return true;
   }
 
   try {
-    console.log('[Clanker] Attaching debugger to tab', tabId);
+    Log.info(LOG_SOURCE, null, 'Attaching debugger to tab', tabId);
     await chrome.debugger.attach({ tabId }, '1.3');
     debuggerAttached.add(tabId);
-    console.log('[Clanker] Debugger attached to tab', tabId);
+    Log.info(LOG_SOURCE, null, 'Debugger attached to tab', tabId);
     return true;
   } catch (error) {
-    console.error('[Clanker] Failed to attach debugger:', error);
+    Log.error(LOG_SOURCE, null, 'Failed to attach debugger:', error);
     return false;
   }
 }
@@ -815,13 +818,13 @@ async function detachDebugger(tabId) {
   }
 
   try {
-    console.log('[Clanker] Detaching debugger from tab', tabId);
+    Log.info(LOG_SOURCE, null, 'Detaching debugger from tab', tabId);
     await chrome.debugger.detach({ tabId });
     debuggerAttached.delete(tabId);
-    console.log('[Clanker] Debugger detached from tab', tabId);
+    Log.info(LOG_SOURCE, null, 'Debugger detached from tab', tabId);
     return true;
   } catch (error) {
-    console.error('[Clanker] Failed to detach debugger:', error);
+    Log.error(LOG_SOURCE, null, 'Failed to detach debugger:', error);
     debuggerAttached.delete(tabId); // Remove from set anyway
     return false;
   }
@@ -885,7 +888,7 @@ async function handleDiagLog(tabId) {
     const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_DIAGNOSTIC_STATE' });
 
     if (!response?.success) {
-      console.error('[Clanker] Failed to get diagnostic state:', response?.error);
+      Log.error(LOG_SOURCE, null, 'Failed to get diagnostic state:', response?.error);
       return;
     }
 
@@ -935,7 +938,7 @@ async function handleDiagLog(tabId) {
     chrome.tabs.create({ url: dataUrl });
 
   } catch (error) {
-    console.error('[Clanker] Diagnostic log error:', error);
+    Log.error(LOG_SOURCE, null, 'Diagnostic log error:', error);
   }
 }
 
@@ -947,7 +950,7 @@ async function handleDiagLogSanitized(tabId) {
     const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_DIAGNOSTIC_STATE' });
 
     if (!response?.success) {
-      console.error('[Clanker] Failed to get diagnostic state:', response?.error);
+      Log.error(LOG_SOURCE, null, 'Failed to get diagnostic state:', response?.error);
       return;
     }
 
@@ -998,7 +1001,7 @@ async function handleDiagLogSanitized(tabId) {
     chrome.tabs.create({ url: dataUrl });
 
   } catch (error) {
-    console.error('[Clanker] Sanitized diagnostic log error:', error);
+    Log.error(LOG_SOURCE, null, 'Sanitized diagnostic log error:', error);
   }
 }
 
@@ -1180,36 +1183,33 @@ async function handleDiagDeactivateAll(tabId) {
     }
     if (Object.keys(updates).length > 0) {
       await Storage.set(updates);
-      console.log(`[Clanker] Deactivated ${Object.keys(updates).length} other conversation(s)`);
+      Log.info(LOG_SOURCE, null, `Deactivated ${Object.keys(updates).length} other conversation(s)`);
     }
 
   } catch (error) {
-    console.error('[Clanker] Deactivate all error:', error);
+    Log.error(LOG_SOURCE, null, 'Deactivate all error:', error);
   }
 }
 
 /**
- * Handle diagnostic: Reset current conversation state
+ * Handle diagnostic: Purge current conversation state
+ * Mode is preserved by the content script — no mode change here.
  */
 async function handleDiagResetConversation(tabId) {
   try {
-    // Tell content script to reset conversation state
     const response = await chrome.tabs.sendMessage(tabId, { type: 'DIAG_RESET_CONVERSATION' });
 
     if (!response?.success) {
-      console.error('[Clanker] Failed to reset conversation:', response?.error);
+      Log.error(LOG_SOURCE, null, 'Failed to purge conversation:', response?.error);
     }
-
-    // Also set mode to deactivated in background
-    await handleSetMode(tabId, MODES.DEACTIVATED);
-
   } catch (error) {
-    console.error('[Clanker] Reset conversation error:', error);
+    Log.error(LOG_SOURCE, null, 'Purge conversation error:', error);
   }
 }
 
 /**
- * Handle diagnostic: Reset all state data
+ * Handle diagnostic: Purge all state data
+ * Mode is preserved by the content script — no mode change here.
  */
 async function handleDiagResetAll(tabId) {
   try {
@@ -1217,7 +1217,7 @@ async function handleDiagResetAll(tabId) {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        return confirm('Reset ALL Clanker state data?\n\nThis will delete all stored data for all conversations including modes, summaries, and customizations.\n\nConfiguration (API key, model, etc.) will be preserved.\n\nThis action cannot be undone.');
+        return confirm('Purge ALL Clanker state data?\n\nThis will delete all stored data for all conversations including summaries, customizations, and profiles.\n\nAI participation mode and configuration (API key, model, etc.) will be preserved.\n\nThis action cannot be undone.');
       }
     });
 
@@ -1243,16 +1243,13 @@ async function handleDiagResetAll(tabId) {
       await Storage.set(configToRestore);
     }
 
-    // Tell content script to reinitialize
+    // Tell content script to reinitialize (it preserves and re-saves current mode)
     await chrome.tabs.sendMessage(tabId, { type: 'DIAG_REINITIALIZE' });
 
-    // Set mode to deactivated
-    await handleSetMode(tabId, MODES.DEACTIVATED);
-
-    console.log('[Clanker] All state data reset (configuration preserved)');
+    Log.info(LOG_SOURCE, null, 'All state data purged (configuration preserved)');
 
   } catch (error) {
-    console.error('[Clanker] Reset all error:', error);
+    Log.error(LOG_SOURCE, null, 'Purge all error:', error);
   }
 }
 
@@ -1529,7 +1526,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // noinspection JSDeprecatedSymbols
 chrome.debugger.onDetach.addListener((source, reason) => {
   const tabId = source.tabId;
-  console.log('[Clanker] Debugger detached from tab', tabId, 'reason:', reason);
+  Log.info(LOG_SOURCE, null, 'Debugger detached from tab', tabId, 'reason:', reason);
   debuggerAttached.delete(tabId);
 
   // If user cancelled, revert to deactivated mode
@@ -1549,7 +1546,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.url && debuggerAttached.has(tabId)) {
     const isGoogleMessages = changeInfo.url.startsWith('https://messages.google.com/');
     if (!isGoogleMessages) {
-      console.log('[Clanker] Tab navigated away from Google Messages, detaching debugger');
+      Log.info(LOG_SOURCE, null, 'Tab navigated away from Google Messages, detaching debugger');
       await detachDebugger(tabId);
       tabModes.set(tabId, MODES.DEACTIVATED);
     }
@@ -1574,9 +1571,9 @@ chrome.runtime.onInstalled.addListener((details) => {
   createContextMenu();
 
   if (details.reason === 'install') {
-    console.log('Clanker extension installed');
+    Log.info(LOG_SOURCE, null, 'Extension installed');
   } else if (details.reason === 'update') {
-    console.log('Clanker extension updated to version', chrome.runtime.getManifest().version);
+    Log.info(LOG_SOURCE, null, 'Extension updated to version', chrome.runtime.getManifest().version);
   }
 });
 
