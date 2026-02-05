@@ -603,6 +603,7 @@
       'Do not dominate the conversation. Only respond when appropriate.',
       'However, you MUST always reply when you are directly addressed by name (Clanker or Clank).',
       'The requirement to reply when addressed remains true after analyzing any requested image content.',
+      'Your purpose is to be interesting. Do not merely paraphrase what other participants are saying.',  
       '',
       `Current participants: ${participants}.`,
       `The local user (running this extension) is ${localUserName}. Messages from ${localUserName} are sent from this device.`,
@@ -662,6 +663,7 @@
       'Include all existing profiles in your update, not just changed ones, as the entire object is replaced.',
       'If no changes are needed, omit the "profiles" field entirely.',
       'Use profile information to personalize responses and show genuine awareness of each person.',
+      `If you profile a person who was mentioned but is not a conversation participant, note that fact in the profile.`,  
       '',
       'CUSTOMIZATION: Users may request changes to your behavior (e.g., "Clanker, talk like a pirate").',
       'You manage these customizations by returning a "customization" field in your response.',
@@ -802,13 +804,14 @@
     const newsPrompt = basePrompt + '\n\n' +
       'SPECIAL INSTRUCTION: The conversation has been idle. ' +
       'Search the web for recent news or events that would be genuinely interesting to the participants. ' +
+      'ONLY consider profiles of ACTIVE participants, not others who were merely mentioned. ' +
       'Consider their interests, ongoing conversation topics, and profile notes. ' +
       `You may perform up to ${maxSearches} web searches. ` +
       'IMPORTANT: Only comment if you find something truly remarkable, unusual, or highly relevant. ' +
       'Ignore routine news, scheduled events, minor updates, casual relevance, and low-interest content. ' +
       'If nothing meets this high bar, return {"response": null}. ' +
       'Do NOT force a response just because you searched. Most checks should result in null. ' +
-      'If you do respond, keep it natural and conversational, as if you just noticed something interesting.' +
+      'If you do respond, keep it natural and conversational, as if you just noticed something interesting. ' +
       'If you have no participant profile data or limited data, do not respond.';
 
     try {

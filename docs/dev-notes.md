@@ -16,5 +16,5 @@
 
 * Provide a context menu Diagnostics -> "Edit Conversation State" page to allow the user to modify the active conversation's stored summary, customization, and profile data. Include Save button (do not save changes automatically; user can close the page to cancel). Also show read-only runtime state and recent messages list below the edit/save area (same outputs as provided on the Show Conversation State page).
 
-
+* The AI may store profile information about people who are mentioned but not conversation participants. 
 

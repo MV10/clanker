@@ -51,10 +51,13 @@
       // Still initialize observers in case config is added later
     }
 
-    // Set up observers and listeners (do this even if no conversation is active yet)
+    // Set up observers and listeners (do this even if no conversation is active yet).
+    // Conversation observer MUST be registered before message observer so that
+    // it fires first in the same mutation batch — this lets it set the
+    // conversationChanging flag before the message observer processes nodes.
+    Observers.setupConversationObserver();
     Observers.setupMessageObserver();
     Observers.setupInputObserver();
-    Observers.setupConversationObserver();
     setupMessageListener();
     Observers.setupVisibilityListener();
 
