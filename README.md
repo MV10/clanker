@@ -6,6 +6,8 @@ You need an API key but if you can't run a local LLM, costs from the big-name se
 
 > Status: The basic functionality is working (ie. running an AI in a single conversation) but I'm still chasing bugs relating to processing in inactive conversations (the other ones in your Google Messages sidebar). There are a lot of tricky timing considerations "driving" a web app from code -- especially when other people and/or you, the user, might be typing or sending more messages.
 
+In terms of safety and security, all data is stored locally on your device, and the AI never has access to anything but text blobs (notes the AI itself has produced, and SMS message content) which are sent by the extension. There is no pathway to exposing or accessing other data or systems on your device, and no way for the AI to control the extension. It is purely text in, text out.
+
 ## Installing & Updating
 
 It is unlikely Google would allow this in the Web Store, so you must "sideload" it.
