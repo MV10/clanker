@@ -4,8 +4,6 @@ Clanker is an _**experimental**_ Chromium browser extension which allows an Open
 
 You need an API key but if you can't run a local LLM, costs from the big-name services should be very low. A real, active, 3 hour conversation between two people with participation by the Grok _grok-4-1-fast-non-reasoning_ model consumed about 1.5 cents of processing time (using January 2026 pricing, and minimal image processing). Note that reasoning models are strongly recommended, the system prompts seem to be too complicated for the more basic models. (For xAI, at least, the feature set and pricing are identical, it's just slightly slower to reply.)
 
-> Status: The basic functionality is working (ie. running an AI in a single conversation) but I'm still chasing bugs relating to processing in inactive conversations (the other ones in your Google Messages sidebar). There are a lot of tricky timing considerations "driving" a web app from code -- especially when other people and/or you, the user, might be typing or sending more messages.
-
 In terms of safety and security, all data is stored locally on your device, and the AI never has access to anything but text blobs (notes the AI itself has produced, and SMS message content) which are sent by the extension. There is no pathway to exposing or accessing other data or systems on your device, and no way for the AI to control the extension. It is purely text in, text out.
 
 ## Installing & Updating
@@ -32,6 +30,8 @@ Navigate to https://messages.google.com and select a conversation, then right-cl
 Your name is not visible in the chat data, unlike other participants, so the AI needs to know who you are.
 
 ## Usage
+
+> DO NOT SCROLL THE CONVERSATION. Because Google Messages is an Angular app, which means it generates the page content on the fly, scrolling can't be readily distinguished from newly-arrived messages, and this will trigger the extension to call the AI to produce a response. I'm not sure yet whether this can be fixed.
 
 Once it is configured, these context menu options become available:
 
@@ -67,11 +67,25 @@ The "Relaxed Responsiveness" checkbox is on by default. This emulates a more hum
 
 A _highly_ experimental feature is profile tracking and news searches. The AI can generate and store profiles of each participant, such as your apparent hobbies. (An interested and unplanned, unexpected behavior is that it'll also sometimes store profile data about people who are merely _mentioned_ in the conversation, but not actual chat participants.) When the conversation is idle for at least two hours, each hour it'll start checking the news for anything unusual that matches anyone's interest, and decide whether to send a message about it. There are start/stop times for quiet hours so it doesn't nag anyone in the middle of the night (local clock, 24hr format). You can limit how many sites it checks (default 10, range 1 to 100) to help control API costs.
 
-## Comments, Troubleshooting, etc.
+## Known Issues
+
+The scrolling problem in the Usage section above is probably the biggest actual bug I'm aware of.
+
+If an MMS attachment takes a long time to download, the AI may request the data before it's actually available. This will cause a brief popup error message but doesn't really do any harm. I am considering whether retry behavior is worth the effort.
+
+Many "behavioral" problems are heavily dependent on the AI service and model you use. Most of my experience and testing is with xAI. The three major problems I have seen are:
+
+* Sometimes it gets more "chatty" than I like, despite many system prompts attempting to guide it to be useful and interesting.
+
+* Occasionally it may output "internal" data like the summary or profile details. These are harmless but obviously undesirable.
+
+* It really, _really_ wants to output citation links in various formats. This is why the system prompts have so many heavily-emphasized restrictions against generating HTML and other markup.
+
+## Help, Comments, Troubleshooting, etc.
 
 You should follow the pinned [Update Notifications](https://github.com/MV10/clanker/issues/1) issue to be notified when the extension is updated. Google releases new versions of Messages frequently and it's possible the extension will need to match changes in the conversation data structures. 
 
-Because Google uses the hideous abomination known as Angular, interaction with the page is difficult (specifically, clicking that "Send" button). When an AI is active the extension has to put the page into debug mode to simulate user keyboard input. Debug mode shows an ugly banner at the top of your window. Do not dismiss the banner, that will disable the interaction (it detaches the debugger).
+Because Google Messages uses the terrible web app framework known as Angular, interaction with the page is difficult (specifically, clicking that "Send" button). When an AI is active the extension has to put the page into debug mode to simulate user keyboard input. Debug mode shows an ugly banner at the top of your window. Do not dismiss the banner, that will disable the interaction (it detaches the debugger).
 
 Google Messages should only be active in a single tab (only one instance should connect to your phone on each computer, by design), but there may be some odd behaviors in the edge case if you have other copies open on other tabs or browser windows.
 
