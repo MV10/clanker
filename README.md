@@ -1,5 +1,7 @@
 # clanker <img src="https://github.com/MV10/clanker/blob/master/extension/icons/icon48.png"/>
 
+> Archived: It's too much work to keep up with Angular-slop DOM changes, so I'm archiving this. As of Feb 2026 it probably still works, but if you try it and it's having problems, it's pretty easy to have Claude CLI or a similar LLM-based programming assistant analyze the code, and analyze before/after local-saves of the web page and update the code accordingly. Meanwhile I'm moving on to a more interesting approach...
+
 Clanker is an _**experimental**_ Chromium browser extension which allows an OpenAI-compliant LLM such as Grok, ChatGPT or even locally-hosted AIs to participate in your Google Messages browser SMS conversations.
 
 You need an API key but if you can't run a local LLM, costs from the big-name services should be very low. A real, active, 3 hour conversation between two people with participation by the Grok _grok-4-1-fast-non-reasoning_ model consumed about 1.5 cents of processing time (using January 2026 pricing, and minimal image processing). Note that reasoning models are strongly recommended, the system prompts seem to be too complicated for the more basic models. (For xAI, at least, the feature set and pricing are identical, it's just slightly slower to reply.)
